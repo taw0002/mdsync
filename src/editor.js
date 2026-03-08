@@ -24,7 +24,9 @@ const feedbackList = document.getElementById('feedbackList');
 const feedbackCount = document.getElementById('feedbackCount');
 const feedbackMeta = document.getElementById('feedbackMeta');
 const sendFeedbackButton = document.getElementById('sendFeedbackButton');
-const addBlockButton = document.getElementById('addBlockButton');
+const editModeButton = document.getElementById('editModeButton');
+const saveEditButton = document.getElementById('saveEditButton');
+const cancelEditButton = document.getElementById('cancelEditButton');
 const floatingToolbarRoot = document.getElementById('floatingToolbarRoot');
 const composerRoot = document.getElementById('composerRoot');
 const statusToast = document.getElementById('statusToast');
@@ -55,6 +57,7 @@ function init() {
   renderFromDoc(currentDoc);
   renderFeedback(feedbackState);
   bindEvents();
+  syncEditModeControls();
   syncThemeWithDocument();
   hydrateFromHash();
   connectSocket();
@@ -65,7 +68,13 @@ function bindEvents() {
   searchTrigger?.addEventListener('click', openSearch);
   sidebarToggle?.addEventListener('click', () => layout.classList.toggle('sidebar-open'));
   sendFeedbackButton?.addEventListener('click', sendFeedback);
-  addBlockButton?.addEventListener('click', startAddBlock);
+  editModeButton?.addEventListener('click', startDocumentEdit);
+  saveEditButton?.addEventListener('click', async () => {
+    await saveEdit();
+  });
+  cancelEditButton?.addEventListener('click', () => {
+    cancelEdit();
+  });
 
   document.addEventListener('keydown', async (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -93,18 +102,6 @@ function bindEvents() {
       event.preventDefault();
       await saveEdit();
     }
-  });
-
-  document.addEventListener('pointerdown', async (event) => {
-    if (!activeEditor) {
-      return;
-    }
-
-    if (event.target.closest('.editor-shell, .floating-toolbar, .composer, .slash-menu')) {
-      return;
-    }
-
-    await saveEdit();
   });
 
   searchPalette.addEventListener('click', (event) => {
@@ -165,23 +162,6 @@ function bindEvents() {
     }
   });
 
-  docRoot.addEventListener('dblclick', async (event) => {
-    if (!state.editable || activeEditor) {
-      return;
-    }
-
-    if (event.target.closest('button, input, textarea')) {
-      return;
-    }
-
-    const block = event.target.closest('.md-block');
-    if (!block) {
-      return;
-    }
-
-    enterEditMode(block);
-  });
-
   feedbackList?.addEventListener('click', async (event) => {
     const deleteButton = event.target.closest('[data-delete-feedback-id]');
     if (deleteButton) {
@@ -210,12 +190,15 @@ function bindEvents() {
 }
 
 function renderFromDoc(doc) {
+  const blocks = (doc.blocks || []).map((block) => ({
+    ...block,
+    previewHtml: renderSearchPreview(block.markdown),
+  }));
+
   currentDoc = {
     ...doc,
-    blocks: (doc.blocks || []).map((block) => ({
-      ...block,
-      previewHtml: renderSearchPreview(block.markdown),
-    })),
+    blocks,
+    markdown: buildDocumentMarkdown(blocks, doc.lineCount),
   };
   docRoot.innerHTML = currentDoc.html;
   pageTitle.textContent = currentDoc.title;
@@ -316,14 +299,19 @@ function decorateDocument() {
   docRoot.querySelectorAll('.heading-reactions').forEach((node) => node.remove());
 
   docRoot.querySelectorAll('.md-block--heading[data-heading-depth="2"], .md-block--heading[data-heading-depth="3"]').forEach((block) => {
+    const heading = block.querySelector('h2, h3');
+    if (!heading) {
+      return;
+    }
+
     const reactions = document.createElement('div');
     reactions.className = 'heading-reactions';
     reactions.innerHTML = `
-      <button type="button" data-feedback-type="approve">Approve</button>
-      <button type="button" data-feedback-type="reject">Reject</button>
-      <button type="button" data-feedback-type="comment">Comment</button>
+      <button type="button" data-feedback-type="approve" aria-label="Approve section" title="Approve section">&#128077;</button>
+      <button type="button" data-feedback-type="reject" aria-label="Reject section" title="Reject section">&#128078;</button>
+      <button type="button" data-feedback-type="comment" aria-label="Comment on section" title="Comment on section">&#128172;</button>
     `;
-    block.appendChild(reactions);
+    heading.appendChild(reactions);
   });
 }
 
@@ -413,119 +401,52 @@ async function refreshCurrentDocument(preserveScroll) {
   }
 }
 
-function enterEditMode(block, options = {}) {
+function startDocumentEdit() {
   if (!state.editable) {
     return;
   }
 
   if (activeEditor) {
-    cancelEdit();
+    return;
   }
 
-  const mode = options.mode || 'replace';
-  const originalHTML = block.innerHTML;
-  const originalMarkdown = mode === 'replace' ? (block.dataset.markdown || '') : '';
-  const section = block.dataset.section || currentDoc.blocks.find((entry) => entry.id === block.dataset.blockId)?.section || currentDoc.title;
+  closeSearch();
+  closeComposer();
+
   const shell = document.createElement('div');
   const host = document.createElement('div');
-  const actions = document.createElement('div');
+  const toolbar = document.createElement('div');
 
   shell.className = 'editor-shell';
   host.className = 'editor-host';
-  actions.className = 'editor-shell__toolbar';
-  actions.innerHTML = `
-    <div class="editor-shell__hint">Visual editing enabled. Select text for formatting and comments. Type / for blocks.</div>
-    <div class="editor-shell__actions">
-      <button type="button" data-editor-cancel="true">Cancel</button>
-      <button type="button" class="primary" data-editor-save="true">Save Cmd+Enter</button>
-    </div>
-  `;
-  shell.appendChild(actions);
+  toolbar.className = 'editor-shell__toolbar';
+  toolbar.innerHTML = '<div class="editor-shell__hint">Visual editing enabled. Save or cancel from the top bar. Select text for formatting and comments. Type / for blocks.</div>';
+  shell.appendChild(toolbar);
   shell.appendChild(host);
 
-  block.classList.add('is-editing');
   docRoot.classList.add('is-editing');
-  block.innerHTML = '';
-  block.appendChild(shell);
+  docRoot.innerHTML = '';
+  docRoot.appendChild(shell);
 
   let editor;
 
   try {
-    editor = new Editor({
-      element: host,
-      content: originalMarkdown,
-      extensions: [
-        StarterKit.configure({
-          link: false,
-        }),
-        Link.configure({
-          autolink: true,
-          openOnClick: false,
-          HTMLAttributes: {
-            rel: 'noreferrer noopener',
-            target: '_blank',
-          },
-        }),
-        TableKit.configure({
-          table: {
-            resizable: true,
-            renderWrapper: true,
-            allowTableNodeSelection: true,
-          },
-        }),
-        TaskList,
-        TaskItem.configure({ nested: true }),
-        Placeholder.configure({
-          placeholder: options.placeholder || 'Type / for commands, or start writing…',
-        }),
-        Markdown.configure({
-          html: true,
-          linkify: true,
-          transformPastedText: true,
-        }),
-      ],
-      autofocus: 'end',
-      onSelectionUpdate: () => {
-        syncFloatingToolbar();
-        syncSlashMenu();
-      },
-      onUpdate: () => {
-        syncFloatingToolbar();
-        syncSlashMenu();
-      },
-    });
+    editor = createMarkdownEditor(host, currentDoc.markdown, 'Type / for commands, or start writing…');
   } catch (error) {
     console.error('Failed to initialize TipTap editor.', {
       error,
-      blockId: block.dataset.blockId,
-      blockType: block.dataset.blockType,
-      mode,
-      markdown: originalMarkdown,
+      path: currentDoc.relativePath,
+      markdown: currentDoc.markdown,
     });
     closeFloatingToolbar();
     closeSlashMenu();
     closeComposer();
     docRoot.classList.remove('is-editing');
-    block.classList.remove('is-editing');
-
-    if (mode === 'insert') {
-      block.remove();
-    } else {
-      block.innerHTML = originalHTML;
-    }
+    renderFromDoc(currentDoc);
 
     showToast('Unable to start visual editor. Check console.');
     return;
   }
-
-  actions.addEventListener('click', async (event) => {
-    if (event.target.dataset.editorCancel === 'true') {
-      cancelEdit();
-    }
-    if (event.target.dataset.editorSave === 'true') {
-      await saveEdit();
-    }
-  });
 
   host.addEventListener('keydown', (event) => {
     if (!activeEditor?.slashState) {
@@ -549,38 +470,18 @@ function enterEditMode(block, options = {}) {
   });
 
   activeEditor = {
-    block,
     editor,
-    mode,
-    originalHTML,
-    originalMarkdown,
-    section,
+    section: currentDoc.title,
+    line: 1,
     toolbar: null,
     slashMenu: null,
     slashState: null,
     slashIndex: 0,
   };
 
+  syncEditModeControls();
   syncFloatingToolbar();
   syncSlashMenu();
-}
-
-function startAddBlock() {
-  if (activeEditor) {
-    cancelEdit();
-  }
-
-  const block = document.createElement('section');
-  block.className = 'md-block md-block--paragraph';
-  block.dataset.blockId = `new-${Date.now()}`;
-  block.dataset.startLine = String(currentDoc.lineCount + 1);
-  block.dataset.endLine = String(currentDoc.lineCount);
-  block.dataset.blockType = 'paragraph';
-  block.dataset.section = currentDoc.blocks.at(-1)?.section || currentDoc.title;
-  block.dataset.markdown = '';
-  docRoot.appendChild(block);
-  block.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  enterEditMode(block, { mode: 'insert', placeholder: 'Start a new section, paragraph, table, or list…' });
 }
 
 function cancelEdit(options = {}) {
@@ -588,23 +489,18 @@ function cancelEdit(options = {}) {
     return;
   }
 
-  const { block, editor, originalHTML, mode } = activeEditor;
+  const { editor } = activeEditor;
   editor?.destroy();
   closeFloatingToolbar();
   closeSlashMenu();
   closeComposer();
   docRoot.classList.remove('is-editing');
-
-  if (mode === 'insert' && options.restore !== false) {
-    block.remove();
-  } else if (mode === 'insert' && options.restore === false) {
-    block.remove();
-  } else {
-    block.innerHTML = originalHTML;
-    block.classList.remove('is-editing');
-  }
-
   activeEditor = null;
+  syncEditModeControls();
+
+  if (options.restore !== false) {
+    renderFromDoc(currentDoc);
+  }
 }
 
 async function saveEdit() {
@@ -622,14 +518,14 @@ async function saveEdit() {
   const markdown = normalizeSerializedMarkdown(markdownStorage.getMarkdown());
   const payload = {
     path: currentDoc.relativePath,
-    startLine: Number(activeEditor.block.dataset.startLine),
-    endLine: Number(activeEditor.block.dataset.endLine),
+    startLine: 1,
+    endLine: Number(currentDoc.lineCount),
     content: markdown,
     section: activeEditor.section,
     anchor: {
-      blockId: activeEditor.block.dataset.blockId,
-      headingId: activeEditor.block.dataset.headingId || null,
-      line: Number(activeEditor.block.dataset.startLine),
+      blockId: null,
+      headingId: null,
+      line: activeEditor.line,
     },
   };
 
@@ -713,11 +609,11 @@ function syncFloatingToolbar() {
               section: activeEditor.section,
               selectedText,
               comment,
-              line: Number(activeEditor.block.dataset.startLine),
+              line: activeEditor.line,
               anchor: {
-                blockId: activeEditor.block.dataset.blockId,
-                headingId: activeEditor.block.dataset.headingId || null,
-                line: Number(activeEditor.block.dataset.startLine),
+                blockId: null,
+                headingId: null,
+                line: activeEditor.line,
               },
             });
           },
@@ -1011,10 +907,86 @@ async function sendFeedback() {
 }
 
 function toggleTheme() {
+  if (activeEditor) {
+    showToast('Save or cancel editing before changing theme');
+    return;
+  }
+
   const next = html.dataset.theme === 'light' ? 'dark' : 'light';
   html.dataset.theme = next;
   localStorage.setItem('mdview-theme', next);
   refreshCurrentDocument(true);
+}
+
+function syncEditModeControls() {
+  const editing = Boolean(activeEditor);
+  if (editModeButton) {
+    editModeButton.hidden = editing;
+  }
+  if (saveEditButton) {
+    saveEditButton.hidden = !editing;
+  }
+  if (cancelEditButton) {
+    cancelEditButton.hidden = !editing;
+  }
+}
+
+function createMarkdownEditor(element, content, placeholder) {
+  return new Editor({
+    element,
+    content,
+    extensions: [
+      StarterKit.configure({
+        link: false,
+      }),
+      Link.configure({
+        autolink: true,
+        openOnClick: false,
+        HTMLAttributes: {
+          rel: 'noreferrer noopener',
+          target: '_blank',
+        },
+      }),
+      TableKit.configure({
+        table: {
+          resizable: true,
+          renderWrapper: true,
+          allowTableNodeSelection: true,
+        },
+      }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Placeholder.configure({
+        placeholder,
+      }),
+      Markdown.configure({
+        html: true,
+        linkify: true,
+        transformPastedText: true,
+      }),
+    ],
+    autofocus: 'end',
+    onSelectionUpdate: () => {
+      syncFloatingToolbar();
+      syncSlashMenu();
+    },
+    onUpdate: () => {
+      syncFloatingToolbar();
+      syncSlashMenu();
+    },
+  });
+}
+
+function buildDocumentMarkdown(blocks, lineCount) {
+  const lines = Array.from({ length: Math.max(1, Number(lineCount) || 0) }, () => '');
+  for (const block of blocks) {
+    const blockLines = String(block.markdown || '').split('\n');
+    const offset = Math.max(0, Number(block.startLine) - 1);
+    blockLines.forEach((line, index) => {
+      lines[offset + index] = line;
+    });
+  }
+  return lines.join('\n');
 }
 
 function currentTheme() {
@@ -1035,6 +1007,11 @@ function syncThemeWithDocument() {
 }
 
 function openSearch() {
+  if (activeEditor) {
+    showToast('Save or cancel editing before searching');
+    return;
+  }
+
   searchPalette.classList.remove('hidden');
   searchPalette.setAttribute('aria-hidden', 'false');
   searchInput.value = '';
@@ -1139,6 +1116,11 @@ function clearSearchHighlights() {
 }
 
 function jumpToTarget(anchor) {
+  if (activeEditor) {
+    showToast('Save or cancel editing before jumping to sections');
+    return;
+  }
+
   const heading = anchor?.headingId ? document.getElementById(anchor.headingId) : null;
   const block = anchor?.blockId
     ? docRoot.querySelector(`.md-block[data-block-id="${CSS.escape(anchor.blockId)}"]`)

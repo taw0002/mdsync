@@ -412,7 +412,7 @@ ${buildStyles()}
       </div>
       <div class="topbar__actions">
         <button class="chip" id="searchTrigger">Cmd+K Search</button>
-        ${appState.editable ? '<button class="chip" id="addBlockButton">Add Block</button>' : ''}
+        ${appState.editable ? '<button class="chip" id="editModeButton">Edit</button><button class="chip accent" id="saveEditButton" hidden>Save</button><button class="chip" id="cancelEditButton" hidden>Cancel</button>' : ''}
         <button class="chip accent" id="sendFeedbackButton">Send Feedback</button>
         <button class="chip" id="themeToggle" aria-label="Toggle theme">Toggle theme</button>
       </div>
@@ -1244,8 +1244,7 @@ html[data-theme="light"] .topbar {
 .feedback-item__delete,
 .floating-toolbar button,
 .composer button,
-.heading-reactions button,
-.add-inline-button {
+.heading-reactions button {
   appearance: none;
   border: 1px solid var(--line);
   background: var(--bg-muted);
@@ -1256,8 +1255,7 @@ html[data-theme="light"] .topbar {
 }
 
 .chip,
-.heading-reactions button,
-.add-inline-button {
+.heading-reactions button {
   padding: 10px 14px;
 }
 
@@ -1266,8 +1264,7 @@ html[data-theme="light"] .topbar {
 .feedback-item__delete:hover,
 .floating-toolbar button:hover,
 .composer button:hover,
-.heading-reactions button:hover,
-.add-inline-button:hover {
+.heading-reactions button:hover {
   border-color: var(--line-strong);
   background: rgba(100, 181, 167, 0.16);
 }
@@ -1418,6 +1415,12 @@ html[data-theme="light"] .topbar {
   font-size: clamp(1.35rem, 2.3vw, 1.7rem);
 }
 
+.md-block--heading[data-heading-depth="2"] h2,
+.md-block--heading[data-heading-depth="3"] h3 {
+  position: relative;
+  padding-right: 116px;
+}
+
 .doc p,
 .doc ul,
 .doc ol,
@@ -1553,10 +1556,6 @@ html[data-theme="light"] .topbar {
   background: rgba(255, 255, 255, 0.025);
 }
 
-.doc.is-editing .md-block:not(.is-editing) {
-  opacity: 0.4;
-}
-
 .md-block.is-search-hit {
   outline: 1px solid rgba(100, 181, 167, 0.42);
   background: rgba(100, 181, 167, 0.08);
@@ -1576,18 +1575,30 @@ html[data-theme="light"] .topbar {
   }
 }
 
-.md-block--heading[data-heading-depth="2"]:hover .heading-reactions,
-.md-block--heading[data-heading-depth="3"]:hover .heading-reactions {
+.heading-reactions {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 0.2s;
+}
+
+h2:hover .heading-reactions,
+h3:hover .heading-reactions {
   opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
 }
 
 .heading-reactions button {
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 999px;
+  min-width: 36px;
+  padding: 6px 8px;
   font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .heading-reactions button[data-feedback-type="approve"] {
@@ -1608,47 +1619,7 @@ html[data-theme="light"] .topbar {
   color: var(--accent);
 }
 
-/* Edit affordance — show pencil on hover */
-.md-block:not(.md-block--heading):hover::after {
-  content: '✏️ Double-click to edit';
-  position: absolute;
-  top: 6px;
-  right: 10px;
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.md-block {
-  position: relative;
-}
-
-.doc.is-editing .md-block::after {
-  display: none;
-}
-
-.heading-reactions {
-  position: absolute;
-  top: 8px;
-  right: 0;
-  display: flex;
-  gap: 8px;
-  opacity: 0;
-  transform: translateY(-4px);
-  pointer-events: none;
-  transition: 140ms ease;
-}
-
-.heading-reactions button {
-  padding: 8px 10px;
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  font-size: 13px;
-}
-
 .editor-shell {
-  margin-top: 8px;
   border: 1px solid rgba(100, 181, 167, 0.42);
   border-radius: 22px;
   background: rgba(8, 13, 20, 0.94);
@@ -1661,10 +1632,6 @@ html[data-theme="light"] .editor-shell {
 }
 
 .editor-shell__toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
@@ -1673,26 +1640,6 @@ html[data-theme="light"] .editor-shell {
 .editor-shell__hint {
   color: var(--text-muted);
   font-size: 13px;
-}
-
-.editor-shell__actions {
-  display: flex;
-  gap: 10px;
-}
-
-.editor-shell__actions button {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: var(--bg-muted);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 9px 12px;
-  cursor: pointer;
-}
-
-.editor-shell__actions .primary {
-  border-color: rgba(100, 181, 167, 0.45);
-  background: rgba(100, 181, 167, 0.16);
 }
 
 .editor-host {
