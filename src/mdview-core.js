@@ -1250,6 +1250,7 @@ html[data-theme="light"] .topbar {
 .sidebar-toggle,
 .feedback-item__delete,
 .floating-toolbar button,
+.block-toolbar__trigger,
 .composer button,
 .heading-reactions button {
   appearance: none;
@@ -1270,6 +1271,7 @@ html[data-theme="light"] .topbar {
 .sidebar-toggle:hover,
 .feedback-item__delete:hover,
 .floating-toolbar button:hover,
+.block-toolbar__trigger:hover,
 .composer button:hover,
 .heading-reactions button:hover {
   border-color: var(--line-strong);
@@ -1772,9 +1774,100 @@ h3:hover .heading-reactions {
   font-family: "Avenir Next", "Segoe UI", sans-serif;
 }
 
+.floating-toolbar__strike {
+  text-decoration: line-through;
+}
+
+.floating-toolbar__code {
+  font-family: "SFMono-Regular", "SFMono-Regular", "Consolas", monospace;
+  font-size: 13px;
+}
+
 .floating-toolbar button[data-active="true"] {
   background: rgba(100, 181, 167, 0.22);
   border-color: rgba(100, 181, 167, 0.45);
+}
+
+.block-toolbar {
+  position: fixed;
+  z-index: 84;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.block-toolbar__trigger {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 11px;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 20px;
+  line-height: 1;
+  pointer-events: auto;
+  opacity: 0.72;
+}
+
+.block-toolbar[data-mode="empty"] .block-toolbar__trigger,
+.block-toolbar[data-open="true"] .block-toolbar__trigger {
+  opacity: 1;
+  background: var(--bg-elevated);
+}
+
+.block-toolbar__menu {
+  width: min(240px, calc(100vw - 64px));
+  padding: 8px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.block-toolbar__item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.block-toolbar__item:hover,
+.block-toolbar__item[data-active="true"] {
+  background: rgba(100, 181, 167, 0.14);
+}
+
+.block-toolbar__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-muted);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.block-toolbar__item[data-active="true"] .block-toolbar__icon {
+  border-color: rgba(100, 181, 167, 0.45);
+  color: var(--accent-strong);
+}
+
+.block-toolbar__label {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 14px;
 }
 
 .composer {
@@ -2131,6 +2224,7 @@ h3:hover .heading-reactions {
   .copy-code,
   .search-palette,
   .floating-toolbar,
+  .block-toolbar,
   .composer,
   .slash-menu,
   .status-toast {

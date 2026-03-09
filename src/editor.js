@@ -34,6 +34,18 @@ const composerRoot = document.getElementById('composerRoot');
 const statusToast = document.getElementById('statusToast');
 const html = document.documentElement;
 const lowlight = createLowlight(common);
+const BLOCK_HANDLE_OFFSET = 44;
+
+const BLOCK_TOOLBAR_ITEMS = [
+  { id: 'heading-2', label: 'Heading 2', icon: 'H2', run: (editor) => editor.chain().focus().toggleHeading({ level: 2 }).run(), isActive: (editor) => editor.isActive('heading', { level: 2 }) },
+  { id: 'heading-3', label: 'Heading 3', icon: 'H3', run: (editor) => editor.chain().focus().toggleHeading({ level: 3 }).run(), isActive: (editor) => editor.isActive('heading', { level: 3 }) },
+  { id: 'bullet-list', label: 'Bullet List', icon: '-', run: (editor) => editor.chain().focus().toggleBulletList().run(), isActive: (editor) => editor.isActive('bulletList') },
+  { id: 'ordered-list', label: 'Numbered List', icon: '1.', run: (editor) => editor.chain().focus().toggleOrderedList().run(), isActive: (editor) => editor.isActive('orderedList') },
+  { id: 'code-block', label: 'Code Block', icon: '</>', run: (editor) => editor.chain().focus().toggleCodeBlock().run(), isActive: (editor) => editor.isActive('codeBlock') },
+  { id: 'blockquote', label: 'Blockquote', icon: '"', run: (editor) => editor.chain().focus().toggleBlockquote().run(), isActive: (editor) => editor.isActive('blockquote') },
+  { id: 'divider', label: 'Horizontal Rule', icon: '---', run: (editor) => editor.chain().focus().setHorizontalRule().run(), isActive: () => false },
+  { id: 'task-list', label: 'Task List', icon: '[ ]', run: (editor) => editor.chain().focus().toggleTaskList().run(), isActive: (editor) => editor.isActive('taskList') },
+];
 
 const SLASH_COMMANDS = [
   { id: 'heading-2', label: 'Heading 2', detail: 'Large section heading', run: (editor) => editor.chain().focus().toggleHeading({ level: 2 }).run() },
@@ -90,6 +102,10 @@ function bindEvents() {
         closeSearch();
         return;
       }
+      if (activeEditor?.blockMenuOpen) {
+        closeBlockToolbarMenu();
+        return;
+      }
       if (activeComposer) {
         closeComposer();
         return;
@@ -115,6 +131,12 @@ function bindEvents() {
   searchPalette.addEventListener('click', (event) => {
     if (event.target.dataset.closeSearch === 'true') {
       closeSearch();
+    }
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    if (activeEditor?.blockToolbar && !activeEditor.blockToolbar.contains(event.target)) {
+      closeBlockToolbarMenu();
     }
   });
 
@@ -165,9 +187,40 @@ function bindEvents() {
     const reaction = event.target.closest('[data-feedback-type]');
     if (reaction) {
       event.preventDefault();
-      const block = reaction.closest('.md-block');
+      const block = getClosestEditorBlock(reaction);
       handleHeadingReaction(block, reaction.dataset.feedbackType, reaction);
       return;
+    }
+  });
+
+  docRoot.addEventListener('mousemove', (event) => {
+    if (!activeEditor || !state.editable || activeEditor.blockMenuOpen) {
+      return;
+    }
+
+    const block = getClosestEditorBlock(event.target);
+    if (!block) {
+      if (activeEditor.hoveredBlock) {
+        activeEditor.hoveredBlock = null;
+        syncBlockToolbar();
+      }
+      return;
+    }
+
+    const rect = block.getBoundingClientRect();
+    const nearLeftEdge = event.clientX <= rect.left + 34;
+    const nextHoveredBlock = nearLeftEdge || isEmptyParagraphBlock(block) ? block : null;
+
+    if (activeEditor.hoveredBlock !== nextHoveredBlock) {
+      activeEditor.hoveredBlock = nextHoveredBlock;
+      syncBlockToolbar();
+    }
+  });
+
+  docRoot.addEventListener('mouseleave', () => {
+    if (activeEditor?.hoveredBlock && !activeEditor.blockMenuOpen) {
+      activeEditor.hoveredBlock = null;
+      syncBlockToolbar();
     }
   });
 
@@ -196,6 +249,18 @@ function bindEvents() {
       await loadDocument(event.state.path, false);
     }
   });
+
+  window.addEventListener('resize', () => {
+    syncFloatingToolbar();
+    syncSlashMenu();
+    syncBlockToolbar();
+  });
+
+  window.addEventListener('scroll', () => {
+    syncFloatingToolbar();
+    syncSlashMenu();
+    syncBlockToolbar();
+  }, { passive: true });
 }
 
 function renderFromDoc(doc) {
@@ -372,6 +437,7 @@ function decorateDocument() {
   });
 
   renderToc(liveToc);
+  syncBlockToolbar();
 }
 
 async function hydrateFromHash() {
@@ -517,6 +583,11 @@ function mountDocumentEditor(markdown) {
     editor,
     host,
     toolbar: null,
+    blockToolbar: null,
+    blockToolbarTarget: null,
+    blockMenuBlock: null,
+    blockMenuOpen: false,
+    hoveredBlock: null,
     slashMenu: null,
     slashState: null,
     slashIndex: 0,
@@ -535,6 +606,7 @@ function destroyEditor() {
   cancelAnimationFrame(pendingDecorateFrame);
   pendingDecorateFrame = 0;
   closeFloatingToolbar();
+  closeBlockToolbar();
   closeSlashMenu();
   activeEditor.editor?.destroy();
   activeEditor = null;
@@ -686,11 +758,49 @@ function cleanNodeText(node) {
   return clone.textContent.replace(/\s+/g, ' ').trim();
 }
 
+function getClosestEditorBlock(node) {
+  const editorRoot = getEditorRoot();
+  if (!editorRoot) {
+    return null;
+  }
+
+  let element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  const decorated = element?.closest?.('.md-block');
+  if (decorated) {
+    return decorated;
+  }
+
+  while (element && element !== editorRoot) {
+    if (element.parentElement === editorRoot) {
+      return element;
+    }
+    element = element.parentElement;
+  }
+
+  return null;
+}
+
+function getSelectionBlock(editor = activeEditor?.editor) {
+  if (!editor) {
+    return null;
+  }
+
+  try {
+    const { node, offset } = editor.view.domAtPos(editor.state.selection.from);
+    const domNode = node.nodeType === Node.ELEMENT_NODE ? node.childNodes[offset] || node : node.parentElement;
+    const element = domNode?.nodeType === Node.ELEMENT_NODE ? domNode : node.parentElement;
+    return getClosestEditorBlock(element) || getEditorRoot()?.firstElementChild || null;
+  } catch {
+    return getEditorRoot()?.firstElementChild || null;
+  }
+}
+
+function isEmptyParagraphBlock(block) {
+  return (block?.dataset.blockType || classifyBlock(block)) === 'paragraph' && cleanNodeText(block) === '';
+}
+
 function getSelectionContext() {
-  const selection = window.getSelection();
-  const anchorNode = selection?.anchorNode;
-  const anchorElement = anchorNode?.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode?.parentElement;
-  const block = anchorElement?.closest('.md-block') || getEditorRoot()?.querySelector('.md-block');
+  const block = getSelectionBlock();
   return {
     block,
     section: block?.dataset.section || currentDoc.title,
@@ -715,8 +825,10 @@ function syncFloatingToolbar() {
     const toolbar = document.createElement('div');
     toolbar.className = 'floating-toolbar';
     toolbar.innerHTML = `
-      <button type="button" data-command="bold"><strong>B</strong></button>
-      <button type="button" data-command="italic"><em>I</em></button>
+      <button type="button" data-command="bold" title="Bold"><strong>B</strong></button>
+      <button type="button" data-command="italic" title="Italic"><em>I</em></button>
+      <button type="button" data-command="strike" title="Strikethrough"><span class="floating-toolbar__strike">S</span></button>
+      <button type="button" data-command="code" title="Inline code"><span class="floating-toolbar__code">&lt;/&gt;</span></button>
       <button type="button" data-command="link">Link</button>
       <button type="button" data-command="comment">Comment</button>
     `;
@@ -731,6 +843,10 @@ function syncFloatingToolbar() {
         editor.chain().focus().toggleBold().run();
       } else if (command === 'italic') {
         editor.chain().focus().toggleItalic().run();
+      } else if (command === 'strike') {
+        editor.chain().focus().toggleStrike().run();
+      } else if (command === 'code') {
+        editor.chain().focus().toggleCode().run();
       } else if (command === 'link') {
         const currentHref = editor.getAttributes('link').href || 'https://';
         const href = window.prompt('Link URL', currentHref);
@@ -782,6 +898,8 @@ function syncFloatingToolbar() {
 
   activeEditor.toolbar.querySelector('[data-command="bold"]').dataset.active = String(editor.isActive('bold'));
   activeEditor.toolbar.querySelector('[data-command="italic"]').dataset.active = String(editor.isActive('italic'));
+  activeEditor.toolbar.querySelector('[data-command="strike"]').dataset.active = String(editor.isActive('strike'));
+  activeEditor.toolbar.querySelector('[data-command="code"]').dataset.active = String(editor.isActive('code'));
   activeEditor.toolbar.querySelector('[data-command="link"]').dataset.active = String(editor.isActive('link'));
 }
 
@@ -792,6 +910,175 @@ function closeFloatingToolbar() {
 
   activeEditor.toolbar.remove();
   activeEditor.toolbar = null;
+}
+
+function syncBlockToolbar() {
+  if (!activeEditor || !state.editable) {
+    closeBlockToolbar();
+    return;
+  }
+
+  if (!activeEditor.blockToolbar) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'block-toolbar';
+    toolbar.hidden = true;
+    toolbar.innerHTML = `
+      <button type="button" class="block-toolbar__trigger" data-block-trigger="true" aria-label="Open block menu" aria-expanded="false">+</button>
+      <div class="block-toolbar__menu" hidden></div>
+    `;
+    toolbar.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) {
+        event.preventDefault();
+      }
+    });
+    toolbar.addEventListener('click', (event) => {
+      const trigger = event.target.closest('[data-block-trigger]');
+      if (trigger) {
+        if (activeEditor.blockMenuOpen) {
+          closeBlockToolbarMenu();
+        } else {
+          activeEditor.blockMenuOpen = true;
+          activeEditor.blockMenuBlock = activeEditor.blockToolbarTarget;
+          syncBlockToolbar();
+        }
+        return;
+      }
+
+      const itemButton = event.target.closest('[data-block-command]');
+      if (itemButton) {
+        applyBlockToolbarCommand(itemButton.dataset.blockCommand);
+      }
+    });
+    floatingToolbarRoot.appendChild(toolbar);
+    activeEditor.blockToolbar = toolbar;
+  }
+
+  const { editor } = activeEditor;
+  if (!activeEditor.blockMenuOpen && !activeEditor.hoveredBlock && !editor.state.selection.empty) {
+    closeBlockToolbar();
+    return;
+  }
+
+  const targetBlock = activeEditor.blockMenuOpen ? activeEditor.blockMenuBlock : resolveBlockToolbarTarget();
+  if (!targetBlock) {
+    closeBlockToolbar();
+    return;
+  }
+
+  const rect = targetBlock.getBoundingClientRect();
+  if (rect.bottom < 0 || rect.top > window.innerHeight) {
+    closeBlockToolbar();
+    return;
+  }
+
+  activeEditor.blockToolbarTarget = targetBlock;
+  activeEditor.blockToolbar.hidden = false;
+  activeEditor.blockToolbar.dataset.mode = isEmptyParagraphBlock(targetBlock) ? 'empty' : 'hover';
+  activeEditor.blockToolbar.dataset.open = String(activeEditor.blockMenuOpen);
+  activeEditor.blockToolbar.style.left = `${Math.max(8, rect.left - BLOCK_HANDLE_OFFSET)}px`;
+  activeEditor.blockToolbar.style.top = `${Math.max(12, rect.top + Math.max(0, Math.min(12, rect.height / 2 - 16)))}px`;
+  activeEditor.blockToolbar.querySelector('[data-block-trigger="true"]').setAttribute('aria-expanded', String(activeEditor.blockMenuOpen));
+  renderBlockToolbarMenu();
+}
+
+function resolveBlockToolbarTarget() {
+  if (!activeEditor) {
+    return null;
+  }
+
+  const hoveredBlock = activeEditor.hoveredBlock;
+  if (hoveredBlock?.isConnected && hoveredBlock.closest('.ProseMirror')) {
+    return hoveredBlock;
+  }
+
+  const selectionBlock = getSelectionBlock(activeEditor.editor);
+  return isEmptyParagraphBlock(selectionBlock) ? selectionBlock : null;
+}
+
+function renderBlockToolbarMenu() {
+  if (!activeEditor?.blockToolbar) {
+    return;
+  }
+
+  const menu = activeEditor.blockToolbar.querySelector('.block-toolbar__menu');
+  if (!menu) {
+    return;
+  }
+
+  if (!activeEditor.blockMenuOpen) {
+    menu.hidden = true;
+    menu.innerHTML = '';
+    return;
+  }
+
+  menu.hidden = false;
+  menu.innerHTML = BLOCK_TOOLBAR_ITEMS.map((item) => `
+    <button type="button" class="block-toolbar__item" data-block-command="${escapeAttribute(item.id)}" data-active="${String(item.isActive?.(activeEditor.editor) || false)}">
+      <span class="block-toolbar__icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
+      <span class="block-toolbar__label">${escapeHtml(item.label)}</span>
+    </button>
+  `).join('');
+}
+
+function applyBlockToolbarCommand(commandId) {
+  const item = BLOCK_TOOLBAR_ITEMS.find((entry) => entry.id === commandId);
+  const block = activeEditor?.blockMenuBlock || activeEditor?.blockToolbarTarget;
+  if (!item || !activeEditor || !block) {
+    return;
+  }
+
+  focusBlockForToolbar(block);
+  item.run(activeEditor.editor);
+  closeBlockToolbarMenu();
+  activeEditor.editor.commands.focus();
+  syncBlockToolbar();
+}
+
+function focusBlockForToolbar(block) {
+  if (!activeEditor?.editor || !block) {
+    return;
+  }
+
+  const indexMatch = block.dataset.blockId?.match(/^block-(\d+)$/);
+  const blockIndex = indexMatch ? Number(indexMatch[1]) - 1 : [...(getEditorRoot()?.children || [])].indexOf(block);
+  if (blockIndex < 0) {
+    return;
+  }
+
+  const { doc } = activeEditor.editor.state;
+  if (blockIndex >= doc.childCount) {
+    return;
+  }
+
+  let position = 0;
+  for (let index = 0; index < blockIndex; index += 1) {
+    position += doc.child(index).nodeSize;
+  }
+
+  const selection = TextSelection.near(doc.resolve(Math.min(position + 1, doc.content.size)), 1);
+  activeEditor.editor.view.dispatch(activeEditor.editor.state.tr.setSelection(selection).scrollIntoView());
+}
+
+function closeBlockToolbarMenu() {
+  if (!activeEditor) {
+    return;
+  }
+
+  activeEditor.blockMenuOpen = false;
+  activeEditor.blockMenuBlock = null;
+  syncBlockToolbar();
+}
+
+function closeBlockToolbar() {
+  if (!activeEditor?.blockToolbar) {
+    return;
+  }
+
+  activeEditor.blockMenuOpen = false;
+  activeEditor.blockMenuBlock = null;
+  activeEditor.blockToolbarTarget = null;
+  activeEditor.blockToolbar.remove();
+  activeEditor.blockToolbar = null;
 }
 
 function syncSlashMenu() {
@@ -1130,14 +1417,18 @@ function createMarkdownEditor(element, content, placeholder) {
     onCreate: () => {
       scheduleDecorateDocument();
       syncDirtyState();
+      syncBlockToolbar();
     },
     onSelectionUpdate: () => {
       syncFloatingToolbar();
+      syncBlockToolbar();
       syncSlashMenu();
+      scheduleDecorateDocument();
     },
     onUpdate: () => {
       syncDirtyState();
       syncFloatingToolbar();
+      syncBlockToolbar();
       syncSlashMenu();
       scheduleDecorateDocument();
     },
@@ -1364,6 +1655,23 @@ function showToast(message) {
   toastTimer = setTimeout(() => {
     statusToast.hidden = true;
   }, 1800);
+}
+
+function uniqueSlug(text, slugCounts) {
+  const base = slugify(text);
+  const count = slugCounts.get(base) ?? 0;
+  slugCounts.set(base, count + 1);
+  return count === 0 ? base : `${base}-${count + 1}`;
+}
+
+function slugify(text) {
+  const normalized = text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+  return normalized || 'section';
 }
 
 function escapeHtml(value) {
