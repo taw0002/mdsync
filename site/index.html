@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>mdsync | Beautiful markdown. Click to edit. Built for review.</title>
+  <title>mdsync | Turn markdown into a beautiful, editable document</title>
   <meta
     name="description"
-    content="mdsync turns markdown into a premium, editable review surface with inline editing, approvals, comments, and an MCP server."
+    content="Run mdsync on any markdown file or docs folder to open a beautiful, editable document in the browser with inline editing, review tools, and MCP support."
   />
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./styles.css" />
@@ -28,36 +28,37 @@
     <main id="top">
       <section class="hero reveal is-visible">
         <div class="hero__copy">
-          <div class="eyebrow">Open source markdown workspace</div>
-          <h1>Beautiful markdown.<br />Click to edit.<br />Built for review.</h1>
+          <div class="eyebrow">Open source markdown viewer and editor</div>
+          <h1>Turn any markdown file into a beautiful, editable document.</h1>
           <p class="hero__lede">
-            mdsync turns a plain `.md` file into a premium browser document with inline editing,
-            structured review, rich rendering, and an MCP server for AI-native workflows.
+            Run <code>mdsync README.md</code> in your terminal. It opens in the browser:
+            beautifully rendered, ready to edit inline, with review and comments built in.
           </p>
           <div class="hero__actions">
-            <a class="button button--primary" href="#demo">Try the live demo</a>
+            <a class="button button--primary" href="#demo">Try it right here</a>
             <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">View on GitHub</a>
           </div>
           <div class="install-card">
             <div class="eyebrow">Install</div>
             <div class="install-card__command">
-              <code id="installCommand">npx mdsync view README.md</code>
+              <code id="installCommand">npx mdsync README.md</code>
               <button class="button button--ghost button--small" type="button" data-copy-command="true">Copy</button>
             </div>
           </div>
         </div>
         <div class="hero__panel">
           <div class="spotlight-card">
-            <div class="spotlight-card__label">Why it lands</div>
-            <div class="spotlight-card__title">The website is the pitch.</div>
+            <div class="spotlight-card__label">How it works</div>
+            <div class="spotlight-card__title">Your <code>.md</code> file, upgraded in one command.</div>
             <p>
-              Show the rendered output, let people edit it instantly, then hand them the install
-              command while the interaction is still fresh.
+              Start with a markdown file or a whole <code>docs/</code> folder. Run
+              <code>mdsync</code>. Get a polished browser document with typography, code blocks,
+              inline editing, and review tools without changing your source of truth.
             </p>
             <div class="spotlight-card__meta">
-              <span>Static site</span>
-              <span>Client-side demo</span>
-              <span>Vercel-ready</span>
+              <span>1. Markdown file</span>
+              <span>2. Run mdsync</span>
+              <span>3. Edit in browser</span>
             </div>
           </div>
         </div>
@@ -65,32 +66,64 @@
 
       <section class="feature-grid reveal">
         <article class="feature-card">
+          <div class="feature-card__icon">📄</div>
+          <h2>Render any markdown</h2>
+          <p>Point it at any <code>.md</code> file or a whole <code>docs/</code> folder. Get beautiful typography, code highlighting, tables, and dark or light themes.</p>
+        </article>
+        <article class="feature-card">
           <div class="feature-card__icon">🖊️</div>
-          <h2>Inline editing</h2>
-          <p>Click or double-click anywhere and edit the document in place, Google Docs style.</p>
+          <h2>Edit inline</h2>
+          <p>Double-click to edit in place and save changes back to the original markdown file. No copy-paste between editor and preview.</p>
         </article>
         <article class="feature-card">
           <div class="feature-card__icon">💬</div>
-          <h2>Feedback &amp; review</h2>
-          <p>Approve, reject, or comment on sections and selections without leaving the document.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-card__icon">🎨</div>
-          <h2>Beautiful rendering</h2>
-          <p>Dark and light themes, polished typography, code highlighting, tables, and task lists.</p>
+          <h2>Review &amp; collaborate</h2>
+          <p>Approve, reject, or comment on any section with a built-in feedback panel designed for async review workflows.</p>
         </article>
         <article class="feature-card">
           <div class="feature-card__icon">🔌</div>
-          <h2>MCP server</h2>
-          <p>AI-native by design, ready for Claude, Cursor, VS Code, and editor-driven workflows.</p>
+          <h2>AI-ready (MCP server)</h2>
+          <p>Works with Claude, Cursor, VS Code, and any MCP-compatible tool so agents can read and edit your docs programmatically.</p>
         </article>
+      </section>
+
+      <section class="demo-section reveal">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">Use cases</div>
+            <h2>Use it for docs, notes, and AI-generated markdown.</h2>
+          </div>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <div class="feature-card__icon">📚</div>
+            <h2>Repo docs</h2>
+            <p><code>mdsync ./docs</code> gives you an instant documentation browser for any project.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-card__icon">🗒️</div>
+            <h2>Personal notes</h2>
+            <p><code>mdsync ~/notes</code> is a lightweight Obsidian alternative built on plain markdown files.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-card__icon">🤖</div>
+            <h2>AI workflows</h2>
+            <p>AI agents already output markdown. mdsync makes that output readable, editable, and reviewable.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-card__icon">🌐</div>
+            <h2>Static sites (coming soon)</h2>
+            <p><code>mdsync build ./docs</code> will generate a deployable docs site from the same markdown source.</p>
+          </article>
+        </div>
       </section>
 
       <section class="demo-section reveal" id="demo">
         <div class="section-heading">
           <div>
             <div class="eyebrow">Live demo</div>
-            <h2>Try the actual interaction model</h2>
+            <h2>See it in action</h2>
           </div>
           <div class="section-heading__actions">
             <span class="demo-hint">Double-click to edit. Select text for the toolbar. Hover headings for review.</span>
@@ -102,13 +135,8 @@
           <div class="demo-surface">
             <div class="demo-surface__topbar">
               <div>
-                <div class="eyebrow">Client-side only</div>
-                <div class="demo-surface__title">Interactive product spec</div>
-              </div>
-              <div class="demo-pills">
-                <span class="demo-pill">TipTap</span>
-                <span class="demo-pill">Markdown</span>
-                <span class="demo-pill">Same visual language</span>
+                <div class="eyebrow">Browser demo</div>
+                <div class="demo-surface__title">Editable markdown document</div>
               </div>
             </div>
             <div class="doc-frame">
@@ -141,8 +169,8 @@
           <div class="eyebrow">Ship it</div>
           <h2>Markdown that feels like a product, not a file format.</h2>
           <p>
-            mdsync is built for docs that need polish, collaboration, and a browser-native editing
-            experience without abandoning plain markdown.
+            Open source, MIT licensed, and zero config. mdsync gives plain markdown a polished,
+            collaborative browser experience without giving up the file-based workflow developers already use.
           </p>
         </div>
         <div class="closing__actions">
