@@ -1,10 +1,11 @@
 {
-  "name": "mdview",
+  "name": "markdownsync",
   "version": "0.1.0",
-  "description": "Beautiful markdown viewer and editor CLI",
+  "description": "Turn any markdown file into a beautiful, editable document in the browser",
   "type": "module",
   "bin": {
-    "md": "./cli.js"
+    "mdsync": "./cli.js",
+    "markdownsync": "./cli.js"
   },
   "scripts": {
     "build": "esbuild src/editor.js --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/editor.bundle.js",

@@ -477,7 +477,7 @@ async function readEditorBundle() {
         return await readFile(bundlePath, 'utf8');
       } catch (error) {
         if (error && error.code === 'ENOENT') {
-          throw new Error(`Missing ${bundlePath}. Run "npm run build" before launching mdview.`);
+          throw new Error(`Missing ${bundlePath}. Run "npm run build" before launching mdsync.`);
         }
         throw error;
       }
