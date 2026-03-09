@@ -88,7 +88,7 @@ init();
 
 function init() {
   bindEvents();
-  if (currentDoc) {
+  if (currentDoc && !(state.mode === 'directory' && currentRoute === 'home')) {
     renderFromDoc(currentDoc);
   } else {
     syncRouteChrome();
@@ -1027,6 +1027,11 @@ function mountDocumentEditor(markdown) {
     slashState: null,
     slashIndex: 0,
   };
+
+  const markdownStorage = editor.storage.markdown;
+  if (markdownStorage?.getMarkdown) {
+    currentDoc.markdown = normalizeSerializedMarkdown(markdownStorage.getMarkdown());
+  }
 
   dirty = false;
   syncSaveState();
