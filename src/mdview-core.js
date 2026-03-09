@@ -15,6 +15,7 @@ export const DEFAULT_PORT = 3456;
 export const VIEW_COMMANDS = new Set(['view', 'serve']);
 export const BUILD_COMMAND = 'build';
 const STATIC_THEMES = ['dark', 'light'];
+const STATIC_THEME_OPTIONS = new Set([...STATIC_THEMES, 'auto']);
 
 const THEMES = {
   dark: {
@@ -286,6 +287,97 @@ export async function startViewerFromArgs(args) {
     shutdown,
     filePath,
     mode: appState.mode,
+  };
+}
+
+export async function startStaticBuild(args) {
+  if (!args.target) {
+    throw new Error('A target directory is required for "build".');
+  }
+
+  if (!args.out) {
+    throw new Error('The "--out" option is required for "build".');
+  }
+
+  const rootDir = path.resolve(process.cwd(), args.target);
+  const outDir = path.resolve(process.cwd(), args.out);
+  const targetStats = safeStat(rootDir);
+
+  if (!targetStats) {
+    throw new Error(`Path not found: ${rootDir}`);
+  }
+
+  if (!targetStats.isDirectory()) {
+    throw new Error(`Static build requires a directory target: ${rootDir}`);
+  }
+
+  ensureSafeBuildOutputTarget(rootDir, outDir);
+
+  const configuredTheme = resolveStaticThemeOption(args.theme);
+  const initialTheme = configuredTheme === 'auto' ? 'dark' : configuredTheme;
+  const workspaceTitle = String(args.title || '').trim() || resolveWorkspaceTitle(args.target, rootDir);
+  const basePath = normalizeBasePath(args.base);
+
+  await rm(outDir, { recursive: true, force: true });
+  await mkdir(outDir, { recursive: true });
+  const files = listMarkdownFiles(rootDir);
+
+  const baseState = createAppState({
+    rootDir,
+    mode: 'directory',
+    currentFile: null,
+    editable: false,
+    defaultTheme: configuredTheme,
+    runtime: 'static',
+    feedbackEnabled: false,
+    workspaceTitle,
+    basePath,
+  });
+
+  const homeHtml = await renderAppShell(baseState, initialTheme, {
+    initialRoute: 'home',
+  });
+  await writeFile(path.join(outDir, 'index.html'), homeHtml, 'utf8');
+
+  const writtenFiles = ['index.html'];
+
+  for (const entry of files) {
+    const fileState = {
+      ...baseState,
+      currentFile: entry.absolute,
+    };
+    const staticDocThemes = Object.fromEntries(
+      await Promise.all(STATIC_THEMES.map(async (themeName) => ([
+        themeName,
+        await buildDocumentPayload(
+          fileState,
+          entry.absolute,
+          themeName,
+          createRenderContext(fileState, entry.absolute),
+        ),
+      ]))),
+    );
+
+    const route = toStaticRoute(entry.relative);
+    const destinationDir = path.join(outDir, ...route.split('/').filter(Boolean));
+    const destinationPath = path.join(destinationDir, 'index.html');
+    const html = await renderAppShell(fileState, initialTheme, {
+      initialRoute: 'file',
+      initialDocPath: entry.absolute,
+      renderContext: createRenderContext(fileState, entry.absolute),
+      staticDocThemes,
+    });
+
+    await mkdir(destinationDir, { recursive: true });
+    await writeFile(destinationPath, html, 'utf8');
+    writtenFiles.push(normalizeSlashes(path.relative(outDir, destinationPath)));
+  }
+
+  return {
+    outDir,
+    indexPath: path.join(outDir, 'index.html'),
+    documentCount: files.length,
+    writtenFiles,
   };
 }
 
@@ -1069,7 +1161,7 @@ function createRenderContext(appState, filePath) {
   };
 }
 
-function rewriteDocumentHref(href, renderContext) {
+export function rewriteDocumentHref(href, renderContext) {
   if (!href || href.startsWith('#')) {
     return href || '#';
   }
@@ -1112,7 +1204,7 @@ function toHashRoute(relativePath) {
   return `#/${encodeURIComponent(relativePath).replace(/%2F/g, '/')}`;
 }
 
-function toStaticRoute(relativePath) {
+export function toStaticRoute(relativePath) {
   const clean = normalizeSlashes(relativePath).replace(/\.md$/i, '');
   return clean ? `${clean}/` : '';
 }
@@ -1129,6 +1221,24 @@ function joinBasePath(basePath, routePath) {
 function normalizeBasePath(basePath) {
   const normalized = `/${String(basePath || '/').trim().replace(/^\/+|\/+$/g, '')}`.replace(/\/+/g, '/');
   return normalized === '/' || normalized === '/.' ? '/' : normalized;
+}
+
+function resolveStaticThemeOption(theme) {
+  const normalized = String(theme || 'auto').trim().toLowerCase() || 'auto';
+  if (!STATIC_THEME_OPTIONS.has(normalized)) {
+    throw new Error(`Invalid theme "${theme}". Expected one of: auto, dark, light.`);
+  }
+  return normalized;
+}
+
+function ensureSafeBuildOutputTarget(rootDir, outDir) {
+  const targetInsideOutput = path.relative(outDir, rootDir);
+  if (
+    targetInsideOutput === ''
+    || (!targetInsideOutput.startsWith('..') && !path.isAbsolute(targetInsideOutput))
+  ) {
+    throw new Error(`Output directory cannot contain the source directory: ${outDir}`);
+  }
 }
 
 function serializeForScript(value) {

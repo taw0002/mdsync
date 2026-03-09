@@ -6,7 +6,14 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { startMcpServer } from './src/mcp.js';
-import { VIEW_COMMANDS, parseArgs, printUsage, startViewerFromArgs } from './src/mdview-core.js';
+import {
+  BUILD_COMMAND,
+  VIEW_COMMANDS,
+  parseArgs,
+  printUsage,
+  startStaticBuild,
+  startViewerFromArgs,
+} from './src/mdview-core.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -18,7 +25,13 @@ async function main() {
     return;
   }
 
-  if (!VIEW_COMMANDS.has(args.command)) {
+  if (args.command === BUILD_COMMAND) {
+    const result = await startStaticBuild(args);
+    console.log(`Built ${result.documentCount} markdown file${result.documentCount === 1 ? '' : 's'} into ${result.outDir}`);
+    return;
+  }
+
+  if (!args.command || !VIEW_COMMANDS.has(args.command)) {
     printUsage(args.command ? 1 : 0);
     return;
   }

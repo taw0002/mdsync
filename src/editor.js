@@ -87,6 +87,9 @@ applyStoredTheme();
 init();
 
 function init() {
+  if (state.runtime === 'static' && currentRoute === 'file' && state.staticDocThemes?.[currentTheme()]) {
+    currentDoc = state.staticDocThemes[currentTheme()];
+  }
   bindEvents();
   if (currentDoc && !(state.mode === 'directory' && currentRoute === 'home')) {
     renderFromDoc(currentDoc);
@@ -678,6 +681,11 @@ async function handleHashRouteChange() {
 
 async function navigateHome(updateHash = false) {
   if (state.mode !== 'directory') {
+    return true;
+  }
+
+  if (state.runtime === 'static') {
+    window.location.href = state.staticIndexHref || '/';
     return true;
   }
 
