@@ -8,7 +8,9 @@
   },
   "scripts": {
     "build": "esbuild src/editor.js --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/editor.bundle.js",
-    "start": "node cli.js"
+    "start": "node cli.js",
+    "site:build": "npm --prefix site run build",
+    "site:dev": "npm --prefix site run dev"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

@@ -1,0 +1,25 @@
+{
+  "name": "mdsync-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild demo.js --bundle --format=iife --platform=browser --target=es2020 --outfile=demo.bundle.js --minify",
+    "dev": "esbuild demo.js --bundle --format=iife --platform=browser --target=es2020 --outfile=demo.bundle.js --sourcemap --servedir=. --serve=127.0.0.1:8080 --watch=forever"
+  },
+  "dependencies": {
+    "@tiptap/core": "^3.20.1",
+    "@tiptap/extension-code-block-lowlight": "^3.20.1",
+    "@tiptap/extension-link": "^3.20.1",
+    "@tiptap/extension-placeholder": "^3.20.1",
+    "@tiptap/extension-table": "^3.20.1",
+    "@tiptap/extension-task-item": "^3.20.1",
+    "@tiptap/extension-task-list": "^3.20.1",
+    "@tiptap/starter-kit": "^3.20.1",
+    "highlight.js": "^11.11.1",
+    "lowlight": "^3.3.0",
+    "tiptap-markdown": "^0.9.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3"
+  }
+}
