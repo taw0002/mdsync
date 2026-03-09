@@ -6,7 +6,7 @@
   <title>mdsync | Markdown viewer and editor</title>
   <meta
     name="description"
-    content="Run mdsync on any markdown file to open it in the browser with live editing, syntax highlighting, and two-way sync."
+    content="One command turns any markdown file into a rendered, editable document in your browser."
   />
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./styles.css" />
@@ -19,7 +19,7 @@
         <span class="brand__word">mdsync</span>
       </a>
       <div class="site-header__actions">
-        <a class="button button--ghost" href="#demo">Live demo</a>
+        <a class="button button--ghost" href="#demo">Demo</a>
         <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">GitHub</a>
         <button class="button button--ghost" type="button" data-theme-toggle="true">Light mode</button>
       </div>
@@ -28,18 +28,19 @@
     <main id="top">
       <section class="hero reveal is-visible">
         <div class="hero__copy">
-          <div class="eyebrow">Open source CLI tool</div>
-          <h1>Every AI agent outputs markdown.<br/>Reading it sucks. We fixed that.</h1>
+          <div class="eyebrow">Open source CLI</div>
+          <h1>You already write markdown.<br/>Now it actually looks good.</h1>
           <p class="hero__lede">
-            One command. Your markdown opens in the browser with real typography,
-            code highlighting, and inline editing that saves back to the file.
+            Every dev has a folder full of <code>.md</code> files that look like plain text.
+            mdsync opens them in your browser &mdash; rendered, searchable, and editable &mdash;
+            without changing how you work. One command. No config.
           </p>
           <div class="hero__actions">
-            <a class="button button--primary" href="#demo">Try the demo</a>
-            <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">View on GitHub</a>
+            <a class="button button--primary" href="#demo">See it work</a>
+            <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">GitHub</a>
           </div>
           <div class="install-card">
-            <div class="eyebrow">Get started</div>
+            <div class="eyebrow">Try it now</div>
             <div class="install-card__command">
               <code id="installCommand">npx markdownsync README.md</code>
               <button class="button button--ghost button--small" type="button" data-copy-command="true">Copy</button>
@@ -48,12 +49,13 @@
         </div>
         <div class="hero__panel">
           <div class="spotlight-card">
-            <div class="spotlight-card__label">What happens</div>
-            <div class="spotlight-card__title">Markdown in, styled document out.</div>
+            <div class="spotlight-card__label">The problem</div>
+            <div class="spotlight-card__title">Markdown is everywhere. Reading it raw is painful.</div>
             <p>
-              Point it at a file or a folder. It starts a local server and opens your
-              browser. Edit in the browser or in your text editor &mdash; changes sync
-              both ways in real time.
+              READMEs, docs folders, AI output, meeting notes &mdash; it's all markdown.
+              But opening a <code>.md</code> file means squinting at hashtags and backticks,
+              or copy-pasting into some preview tool. mdsync skips all that.
+              Point it at a file or folder, and it's rendered in your browser instantly.
             </p>
             <div class="spotlight-card__meta">
               <span><code>mdsync README.md</code></span>
@@ -66,47 +68,47 @@
 
       <section class="feature-grid reveal">
         <article class="feature-card">
-          <h2>Render anything</h2>
-          <p>Works on any <code>.md</code> file or folder. Headings, code blocks, tables, task lists, links. Dark and light themes.</p>
+          <h2>One command, done</h2>
+          <p>Run <code>mdsync README.md</code>. It opens in your browser. Headings, code blocks, tables, links &mdash; all rendered. Dark and light themes.</p>
         </article>
         <article class="feature-card">
-          <h2>Edit in place</h2>
-          <p>Double-click any section. Edit with a rich text toolbar. Hit save. The original <code>.md</code> file updates on disk.</p>
+          <h2>Edit in the browser</h2>
+          <p>Double-click any section. Make your changes. Hit save. The <code>.md</code> file on disk updates. No copy-paste loop between editor and preview.</p>
         </article>
         <article class="feature-card">
-          <h2>Two-way sync</h2>
-          <p>Change the file in VS Code and the browser updates. Change it in the browser and the file updates. No refresh needed.</p>
+          <h2>Changes sync both ways</h2>
+          <p>Edit in VS Code? The browser updates live. Edit in the browser? The file updates on disk. You never have to refresh.</p>
         </article>
         <article class="feature-card">
-          <h2>MCP server</h2>
-          <p>Run <code>mdsync mcp</code> to expose your docs to Claude, Cursor, or any MCP-compatible AI tool.</p>
+          <h2>Works with AI tools</h2>
+          <p>Run <code>mdsync mcp</code> to let Claude, Cursor, or any MCP-compatible tool read and write your docs programmatically.</p>
         </article>
       </section>
 
       <section class="demo-section reveal">
         <div class="section-heading">
           <div>
-            <div class="eyebrow">What people use it for</div>
-            <h2>Docs, notes, and everything AI agents generate.</h2>
+            <div class="eyebrow">Use cases</div>
+            <h2>If you have markdown files, you have a use for this.</h2>
           </div>
         </div>
 
         <div class="feature-grid">
           <article class="feature-card">
             <h2>Project docs</h2>
-            <p><code>mdsync ./docs</code> &mdash; browse, search, and edit your project's documentation without leaving the terminal workflow.</p>
+            <p><code>mdsync ./docs</code> turns your docs folder into a browsable workspace. Search across files, click to open, edit inline.</p>
           </article>
           <article class="feature-card">
-            <h2>Personal notes</h2>
-            <p><code>mdsync ~/notes</code> &mdash; a lightweight note viewer for plain markdown files. No vault format, no proprietary sync.</p>
+            <h2>Notes</h2>
+            <p><code>mdsync ~/notes</code> &mdash; if you keep notes in plain markdown, this is the fastest way to read and edit them.</p>
           </article>
           <article class="feature-card">
-            <h2>AI output review</h2>
-            <p>AI agents dump walls of markdown. mdsync makes it readable and lets you edit the parts that need fixing.</p>
+            <h2>AI output</h2>
+            <p>AI agents dump markdown constantly. mdsync makes that output readable and lets you fix the parts that are wrong.</p>
           </article>
           <article class="feature-card">
-            <h2>Static docs site</h2>
-            <p><code>mdsync build ./docs --out ./site</code> &mdash; generate a static site from the same markdown. Deploy anywhere.</p>
+            <h2>Docs sites</h2>
+            <p><code>mdsync build ./docs --out ./site</code> generates a static site from the same files. Deploy it anywhere. No build framework.</p>
           </article>
         </div>
       </section>
@@ -114,12 +116,12 @@
       <section class="demo-section reveal" id="demo">
         <div class="section-heading">
           <div>
-            <div class="eyebrow">Live demo</div>
-            <h2>Try it here</h2>
+            <div class="eyebrow">Demo</div>
+            <h2>This is what your markdown looks like</h2>
           </div>
           <div class="section-heading__actions">
             <span class="demo-hint">Double-click to edit. Select text for the toolbar.</span>
-            <button class="button button--ghost button--small" type="button" data-reset-demo="true">Reset demo</button>
+            <button class="button button--ghost button--small" type="button" data-reset-demo="true">Reset</button>
           </div>
         </div>
 
@@ -127,7 +129,7 @@
           <div class="demo-surface">
             <div class="demo-surface__topbar">
               <div>
-                <div class="eyebrow">Browser preview</div>
+                <div class="eyebrow">localhost:3456</div>
                 <div class="demo-surface__title">sample.md</div>
               </div>
             </div>
@@ -150,7 +152,7 @@
             </div>
             <div class="feedback-panel__meta">Comments stay in this browser tab.</div>
             <div class="feedback-list" id="feedbackList">
-              <div class="feedback-empty">Select text or hover a heading to leave a comment.</div>
+              <div class="feedback-empty">Select text to leave a comment.</div>
             </div>
           </aside>
         </div>
@@ -158,11 +160,11 @@
 
       <section class="closing reveal">
         <div class="closing__copy">
-          <div class="eyebrow">Open source</div>
-          <h2>Zero config. MIT licensed. Just markdown.</h2>
+          <div class="eyebrow">Open source, MIT license</div>
+          <h2>No config file. No theme to pick. No plugins.</h2>
           <p>
-            No <code>config.yml</code>. No theme files. No build framework.
             Install it, point it at your markdown, and it works.
+            That's the whole pitch.
           </p>
         </div>
         <div class="closing__actions">
