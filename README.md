@@ -92,18 +92,25 @@ mdsync build ./docs --out ./site && netlify deploy --dir ./site --prod
 ## CLI Reference
 
 ```
-mdsync <file-or-directory>       Serve markdown in the browser
-mdsync build <dir> --out <dir>   Generate a static site
-mdsync mcp                       Start MCP server
+mdsync <file-or-directory>              Serve markdown in the browser
+mdsync view <file-or-directory>         Explicit live mode
+mdsync serve <directory>                Force directory mode
+mdsync build <dir> --out <dir>          Generate a static site
+mdsync mcp                              Start MCP server
+mdsync --help                           Show usage
 ```
 
 ### Options
 
 ```
---port, -p <number>   Port to serve on (default: 3456)
---light               Start in light theme
---no-edit             Disable browser editing
---no-open             Don't auto-open the browser
+--port, -p <number>          Port to serve on (default: 3456)
+--light                      Start in light theme
+--no-edit                    Disable browser editing
+--no-open                    Don't auto-open the browser
+--out <dir>                  Output directory for build
+--title "My Docs"            Custom site title for build
+--base /docs                 Base path for static builds
+--theme dark|light|auto      Default theme for static builds
 ```
 
 ### Examples
@@ -124,13 +131,107 @@ mdsync build ./docs --out ./public
 
 ## MCP Integration
 
-mdsync includes a Model Context Protocol server for AI tool integration:
+mdsync includes a Model Context Protocol server so agents can open docs, read markdown, inspect feedback, and write changes back to disk:
 
 ```
 mdsync mcp
 ```
 
-This exposes your markdown files as MCP resources, letting AI assistants read and edit documents through the standard MCP interface.
+If you want to run it through `npx` from an MCP client config, use:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "markdownsync", "mcp"]
+}
+```
+
+### Claude Desktop
+
+On macOS, add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mdsync": {
+      "command": "npx",
+      "args": ["-y", "markdownsync", "mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add this to your global `~/.cursor/mcp.json` or project-local `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mdsync": {
+      "command": "npx",
+      "args": ["-y", "markdownsync", "mcp"]
+    }
+  }
+}
+```
+
+### OpenClaw
+
+If your OpenClaw install uses `mcp.servers`, add:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "mdsync": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "markdownsync", "mcp"]
+      }
+    }
+  }
+}
+```
+
+### MCP Tools
+
+#### `present`
+
+Opens a markdown file or directory in the browser viewer.
+
+Params:
+
+- `path` (`string`) — Absolute or relative path to a markdown file or directory
+
+Returns the viewer URL, resolved file path, and feedback file path.
+
+#### `get_document`
+
+Returns the current markdown for a file.
+
+Params:
+
+- `path` (`string`) — Path to the markdown file
+
+#### `get_feedback`
+
+Returns the structured `.feedback.json` document stored next to the markdown file.
+
+Params:
+
+- `path` (`string`) — Path to the markdown file
+
+#### `write_document`
+
+Writes markdown content back to disk. Paths are resolved relative to the MCP server's current working directory.
+
+Params:
+
+- `path` (`string`) — Path to the markdown file
+- `content` (`string`) — Full markdown content to write
+
+Returns a confirmation object with the resolved path.
 
 ## Links
 

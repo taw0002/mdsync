@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename as renameFile, rm, writeFile } from 'node:fs/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,8 @@ import { WebSocketServer } from 'ws';
 
 export const DEFAULT_PORT = 3456;
 export const VIEW_COMMANDS = new Set(['view', 'serve']);
+export const BUILD_COMMAND = 'build';
+const STATIC_THEMES = ['dark', 'light'];
 
 const THEMES = {
   dark: {
@@ -32,15 +34,27 @@ const highlighterCache = new Map();
 
 export function parseArgs(argv) {
   const result = {
-    command: argv[0] ?? null,
+    command: null,
     target: undefined,
     port: DEFAULT_PORT,
     light: false,
     noEdit: false,
     noOpen: false,
+    out: undefined,
+    title: undefined,
+    base: '/',
+    theme: 'auto',
   };
 
-  let index = 1;
+  const first = argv[0] ?? null;
+  if (!first || first === '--help' || first === '-h') {
+    return result;
+  }
+
+  const hasExplicitCommand = first === 'mcp' || first === BUILD_COMMAND || VIEW_COMMANDS.has(first);
+  result.command = hasExplicitCommand ? first : 'view';
+
+  let index = hasExplicitCommand ? 1 : 0;
   while (index < argv.length) {
     const token = argv[index];
 
@@ -74,6 +88,30 @@ export function parseArgs(argv) {
       continue;
     }
 
+    if (token === '--out') {
+      result.out = argv[index + 1];
+      index += 2;
+      continue;
+    }
+
+    if (token === '--title') {
+      result.title = argv[index + 1];
+      index += 2;
+      continue;
+    }
+
+    if (token === '--base') {
+      result.base = argv[index + 1] ?? '/';
+      index += 2;
+      continue;
+    }
+
+    if (token === '--theme') {
+      result.theme = argv[index + 1] ?? 'auto';
+      index += 2;
+      continue;
+    }
+
     if (token === '--help' || token === '-h') {
       result.command = null;
       index = argv.length;
@@ -88,20 +126,23 @@ export function parseArgs(argv) {
 }
 
 export function printUsage(exitCode) {
-  console.log(`md - Beautiful Markdown Viewer & Editor CLI
+  console.log(`mdsync - Beautiful Markdown Viewer & Editor CLI
 
 Usage:
-  md view file.md
-  md view .
-  md serve .
-  md serve ./docs -p 3333
-  md mcp
+  mdsync README.md
+  mdsync ./docs
+  mdsync build ./docs --out ./site
+  mdsync mcp
 
 Options:
-  --port, -p    Port (default: 3456)
-  --light       Light theme
-  --no-edit     Disable editing
-  --no-open     Don't auto-open browser`);
+  --port, -p              Port (default: 3456)
+  --light                 Light theme for live mode
+  --no-edit               Disable editing in live mode
+  --no-open               Don't auto-open browser
+  --out <dir>             Output directory for build
+  --title "My Docs"       Custom site title for build
+  --base /docs            Base path for static builds
+  --theme dark|light|auto Default theme for static builds`);
   process.exitCode = exitCode;
 }
 
@@ -129,6 +170,10 @@ export async function startViewerFromArgs(args) {
     currentFile: filePath,
     editable: !args.noEdit,
     defaultTheme: args.light ? 'light' : 'dark',
+    runtime: 'live',
+    feedbackEnabled: true,
+    workspaceTitle: resolveWorkspaceTitle(rootInput, rootDir),
+    basePath: '/',
   });
 
   const server = createHttpServer(appState);
@@ -199,7 +244,7 @@ export async function startViewerFromArgs(args) {
       appState.broadcast({
         type: 'directory-changed',
         path: normalized,
-        files: listMarkdownFiles(appState.rootDir),
+        files: toClientFileTree(listMarkdownFiles(appState.rootDir)),
       });
     }
 
@@ -260,13 +305,27 @@ export function openBrowser(url) {
   spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
 }
 
-function createAppState({ rootDir, mode, currentFile, editable, defaultTheme }) {
+function createAppState({
+  rootDir,
+  mode,
+  currentFile,
+  editable,
+  defaultTheme,
+  runtime = 'live',
+  feedbackEnabled = true,
+  workspaceTitle = path.basename(rootDir),
+  basePath = '/',
+}) {
   return {
     rootDir,
     mode,
-    currentFile: path.resolve(currentFile),
+    currentFile: currentFile ? path.resolve(currentFile) : null,
     editable,
     defaultTheme,
+    runtime,
+    feedbackEnabled,
+    workspaceTitle,
+    basePath,
     broadcast: () => {},
   };
 }
@@ -278,7 +337,10 @@ function createHttpServer(appState) {
 
       if (request.method === 'GET' && url.pathname === '/') {
         const theme = resolveTheme(url.searchParams.get('theme'), appState.defaultTheme);
-        const html = await renderAppShell(appState, theme);
+        const html = await renderAppShell(appState, theme, {
+          initialRoute: appState.mode === 'directory' ? 'home' : 'file',
+          initialDocPath: appState.currentFile,
+        });
         send(response, 200, html, 'text/html; charset=utf-8');
         return;
       }
@@ -302,7 +364,66 @@ function createHttpServer(appState) {
           sendJson(response, 400, { error: 'Files endpoint is only available in directory mode.' });
           return;
         }
-        sendJson(response, 200, { files: listMarkdownFiles(appState.rootDir) });
+
+        sendJson(response, 200, { files: toClientFileTree(listMarkdownFiles(appState.rootDir)) });
+        return;
+      }
+
+      if (url.pathname === '/api/files' && request.method === 'POST') {
+        if (appState.mode !== 'directory') {
+          sendJson(response, 400, { error: 'File management is only available in directory mode.' });
+          return;
+        }
+        if (!appState.editable || appState.runtime !== 'live') {
+          sendJson(response, 403, { error: 'Editing is disabled.' });
+          return;
+        }
+
+        const body = await readRequestBody(request);
+        const payload = JSON.parse(body || '{}');
+        const createdPath = await createMarkdownFile(appState, payload.path);
+        const theme = resolveTheme(payload.theme, appState.defaultTheme);
+        const doc = await buildDocumentPayload(appState, createdPath, theme);
+        sendJson(response, 201, {
+          ok: true,
+          file: toClientFileEntry(getWorkspaceFileEntry(appState.rootDir, createdPath)),
+          doc,
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/files' && request.method === 'PATCH') {
+        if (appState.mode !== 'directory') {
+          sendJson(response, 400, { error: 'File management is only available in directory mode.' });
+          return;
+        }
+        if (!appState.editable || appState.runtime !== 'live') {
+          sendJson(response, 403, { error: 'Editing is disabled.' });
+          return;
+        }
+
+        const body = await readRequestBody(request);
+        const payload = JSON.parse(body || '{}');
+        const renamedPath = await renameMarkdownDocument(appState, payload.path, payload.nextPath);
+        sendJson(response, 200, {
+          ok: true,
+          file: toClientFileEntry(getWorkspaceFileEntry(appState.rootDir, renamedPath)),
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/files' && request.method === 'DELETE') {
+        if (appState.mode !== 'directory') {
+          sendJson(response, 400, { error: 'File management is only available in directory mode.' });
+          return;
+        }
+        if (!appState.editable || appState.runtime !== 'live') {
+          sendJson(response, 403, { error: 'Editing is disabled.' });
+          return;
+        }
+
+        await deleteMarkdownDocument(appState, url.searchParams.get('path'));
+        sendJson(response, 200, { ok: true });
         return;
       }
 
@@ -366,25 +487,37 @@ function createHttpServer(appState) {
   });
 }
 
-async function renderAppShell(appState, themeName) {
+async function renderAppShell(appState, themeName, options = {}) {
+  const initialRoute = options.initialRoute ?? (appState.mode === 'directory' ? 'home' : 'file');
+  const initialDocPath = options.initialDocPath ?? appState.currentFile;
   const [initialDoc, initialFeedback, editorBundle] = await Promise.all([
-    buildDocumentPayload(appState, appState.currentFile, themeName),
-    readFeedbackDocument(appState.currentFile),
+    initialDocPath ? buildDocumentPayload(appState, initialDocPath, themeName, options.renderContext) : null,
+    appState.feedbackEnabled && initialDocPath ? readFeedbackDocument(initialDocPath) : null,
     readEditorBundle(),
   ]);
 
-  const fileTree = appState.mode === 'directory' ? listMarkdownFiles(appState.rootDir) : [];
+  const fileTree = appState.mode === 'directory' ? toClientFileTree(listMarkdownFiles(appState.rootDir)) : [];
+  const initialTitle = initialRoute === 'home' && appState.mode === 'directory'
+    ? appState.workspaceTitle
+    : (initialDoc?.title ?? appState.workspaceTitle);
 
   const state = {
+    runtime: appState.runtime,
     mode: appState.mode,
     rootDir: appState.rootDir,
-    currentPath: initialDoc.relativePath,
-    currentTitle: initialDoc.title,
+    workspaceTitle: appState.workspaceTitle,
+    currentPath: initialDoc?.relativePath ?? null,
+    currentTitle: initialTitle,
     editable: appState.editable,
+    feedbackEnabled: appState.feedbackEnabled,
     defaultTheme: appState.defaultTheme,
     initialDoc,
     initialFeedback,
+    initialRoute,
     fileTree,
+    staticIndexHref: options.staticIndexHref ?? joinBasePath(appState.basePath, ''),
+    staticDocThemes: options.staticDocThemes ?? null,
+    staticBasePath: appState.basePath,
   };
 
   return `<!doctype html>
@@ -392,13 +525,24 @@ async function renderAppShell(appState, themeName) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(initialDoc.title)}</title>
+  <title>${escapeHtml(initialTitle)}</title>
+  <script>
+    (function () {
+      const saved = localStorage.getItem('mdview-theme');
+      const preferred = saved === 'light' || saved === 'dark'
+        ? saved
+        : (${JSON.stringify(appState.defaultTheme)} === 'auto'
+          ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+          : ${JSON.stringify(appState.defaultTheme)});
+      document.documentElement.dataset.theme = preferred;
+    })();
+  </script>
   <style>
 ${buildStyles()}
   </style>
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell ${appState.mode === 'directory' ? 'app-shell--directory' : 'app-shell--file'}" data-runtime="${escapeHtml(appState.runtime)}" data-route="${escapeHtml(initialRoute)}">
     <header class="topbar">
       <div class="topbar__meta">
         <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
@@ -406,21 +550,21 @@ ${buildStyles()}
           <span></span>
         </button>
         <div>
-          <div class="eyebrow">${appState.mode === 'directory' ? 'Directory mode' : 'Single file'}</div>
-          <div class="page-title" id="pageTitle">${escapeHtml(initialDoc.title)}</div>
+          <div class="eyebrow" id="routeEyebrow">${appState.mode === 'directory' ? (initialRoute === 'home' ? 'Workspace' : 'Document') : 'Single file'}</div>
+          <div class="page-title" id="pageTitle">${escapeHtml(initialTitle)}</div>
         </div>
       </div>
       <div class="topbar__actions">
+        ${appState.mode === 'directory' ? '<button class="chip workspace-back-chip" id="workspaceBackButton" type="button">← Back to files</button>' : ''}
         <button class="chip" id="searchTrigger">Cmd+K Search</button>
         ${appState.editable ? '<span class="save-status" id="saveStatus" hidden>Unsaved changes</span><button class="chip accent" id="saveEditButton" hidden>Save</button>' : ''}
-        <button class="chip accent" id="sendFeedbackButton">Send Feedback</button>
+        ${appState.feedbackEnabled ? '<button class="chip accent" id="sendFeedbackButton">Send Feedback</button>' : ''}
         <button class="chip" id="themeToggle" aria-label="Toggle theme">Toggle theme</button>
       </div>
     </header>
 
-    <div class="layout" id="layout">
+    <div class="layout" id="layout" data-route="${escapeHtml(initialRoute)}">
       <aside class="sidebar" id="sidebar">
-        ${appState.mode === 'directory' ? '<section class="sidebar-section"><div class="sidebar-label">Files</div><nav id="fileTree" class="file-tree"></nav></section>' : ''}
         <section class="sidebar-section">
           <div class="sidebar-label">Contents</div>
           <nav id="toc" class="toc"></nav>
@@ -428,10 +572,37 @@ ${buildStyles()}
       </aside>
 
       <main class="viewer" id="viewer">
-        <article class="doc" id="docRoot">${initialDoc.html}</article>
+        ${appState.mode === 'directory' ? `
+        <section class="workspace-home" id="workspaceHome">
+          <div class="workspace-home__hero">
+            <div>
+              <div class="eyebrow">Workspace</div>
+              <h1 class="workspace-home__title">${escapeHtml(appState.workspaceTitle)}</h1>
+              <p class="workspace-home__subtitle">Browse markdown files, search content, and jump into the full rendered view.</p>
+            </div>
+            <div class="workspace-home__controls">
+              <label class="workspace-search" for="workspaceSearchInput">
+                <span>Search files</span>
+                <input id="workspaceSearchInput" type="search" placeholder="Filter by filename or content…" autocomplete="off" />
+              </label>
+              <div class="workspace-sort" id="workspaceSort" role="group" aria-label="Sort files">
+                <button class="workspace-sort__button is-active" type="button" data-sort="alpha">A–Z</button>
+                <button class="workspace-sort__button" type="button" data-sort="recent">Recent</button>
+              </div>
+              ${appState.editable && appState.runtime === 'live' ? '<button class="chip accent workspace-action" id="workspaceNewFileButton" type="button">New File</button>' : ''}
+            </div>
+          </div>
+          <div class="workspace-empty" id="workspaceEmpty" hidden>No files match your search.</div>
+          <div class="workspace-groups" id="workspaceGroups"></div>
+        </section>
+        <div class="viewer-routebar" id="viewerRoutebar">
+          <button class="viewer-routebar__back" id="viewerBackButton" type="button">← Back to files</button>
+          <div class="viewer-routebar__path" id="viewerBreadcrumb"></div>
+        </div>` : ''}
+        <article class="doc" id="docRoot">${initialDoc?.html ?? ''}</article>
       </main>
 
-      <aside class="feedback-panel" id="feedbackPanel">
+      ${appState.feedbackEnabled ? `<aside class="feedback-panel" id="feedbackPanel">
         <div class="feedback-panel__header">
           <div>
             <div class="sidebar-label">Feedback</div>
@@ -441,7 +612,7 @@ ${buildStyles()}
         </div>
         <div class="feedback-panel__meta" id="feedbackMeta"></div>
         <div class="feedback-list" id="feedbackList"></div>
-      </aside>
+      </aside>` : ''}
     </div>
   </div>
 
@@ -487,7 +658,7 @@ async function readEditorBundle() {
   return editorBundlePromise;
 }
 
-export async function buildDocumentPayload(appState, filePath, themeName) {
+export async function buildDocumentPayload(appState, filePath, themeName, renderContext = createRenderContext(appState, filePath)) {
   const source = await readFile(filePath, 'utf8');
   const blocks = splitMarkdownBlocks(source);
   const headings = [];
@@ -516,7 +687,7 @@ export async function buildDocumentPayload(appState, filePath, themeName) {
   const blockPayloads = [];
 
   for (const block of blocks) {
-    const rendered = await renderBlock(block, themeName);
+    const rendered = await renderBlock(block, themeName, renderContext);
     renderedBlocks.push(rendered.shellHtml);
     blockPayloads.push({
       id: rendered.id,
@@ -546,10 +717,10 @@ export async function buildDocumentPayload(appState, filePath, themeName) {
   };
 }
 
-async function renderBlock(block, themeName) {
+async function renderBlock(block, themeName, renderContext) {
   const blockId = createHash('sha1').update(`${block.startLine}:${block.endLine}:${block.markdown}`).digest('hex').slice(0, 12);
-  const renderedHtml = await renderMarkdownBlock(block, themeName, true);
-  const previewHtml = await renderMarkdownBlock(block, themeName, false);
+  const renderedHtml = await renderMarkdownBlock(block, themeName, true, renderContext);
+  const previewHtml = await renderMarkdownBlock(block, themeName, false, renderContext);
   const attrs = [
     `class="md-block md-block--${escapeHtml(block.type)}"`,
     `data-block-id="${blockId}"`,
@@ -574,7 +745,7 @@ async function renderBlock(block, themeName) {
   };
 }
 
-async function renderMarkdownBlock(block, themeName, withChrome) {
+async function renderMarkdownBlock(block, themeName, withChrome, renderContext) {
   if (block.type === 'code') {
     const { code, language } = parseCodeFence(block.markdown);
     const highlighted = await highlightCode(code, language, themeName);
@@ -591,6 +762,12 @@ async function renderMarkdownBlock(block, themeName, withChrome) {
     const text = block.heading?.text ?? tokens.map((token) => token.raw || token.text || '').join('').trim();
     const slug = block.heading?.slug ?? slugify(text);
     return `<h${depth} id="${escapeHtml(slug)}">${escapeHtml(text)}</h${depth}>`;
+  };
+  renderer.link = function ({ href, title, tokens }) {
+    const text = this.parser.parseInline(tokens);
+    const nextHref = rewriteDocumentHref(href, renderContext);
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<a href="${escapeHtml(nextHref)}"${titleAttr}>${text}</a>`;
   };
 
   return marked.parse(block.markdown, {
@@ -882,6 +1059,78 @@ function slugify(text) {
   return normalized || 'section';
 }
 
+function createRenderContext(appState, filePath) {
+  return {
+    rootDir: appState.rootDir,
+    mode: appState.mode,
+    runtime: appState.runtime,
+    filePath,
+    basePath: appState.basePath,
+  };
+}
+
+function rewriteDocumentHref(href, renderContext) {
+  if (!href || href.startsWith('#')) {
+    return href || '#';
+  }
+
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(href) || href.startsWith('//')) {
+    return href;
+  }
+
+  const [targetPath, targetHash = ''] = href.split('#');
+  if (!targetPath || !targetPath.toLowerCase().endsWith('.md')) {
+    return href;
+  }
+
+  const absoluteTarget = path.resolve(path.dirname(renderContext.filePath), targetPath);
+  try {
+    ensureWithinRoot(renderContext.rootDir, absoluteTarget);
+  } catch {
+    return href;
+  }
+
+  if (!safeStat(absoluteTarget)) {
+    return href;
+  }
+
+  const relative = normalizeSlashes(path.relative(renderContext.rootDir, absoluteTarget));
+  const hashSuffix = targetHash ? `#${targetHash}` : '';
+
+  if (renderContext.runtime === 'static') {
+    return `${joinBasePath(renderContext.basePath, toStaticRoute(relative))}${hashSuffix}`;
+  }
+
+  if (renderContext.mode === 'directory') {
+    return toHashRoute(relative);
+  }
+
+  return href;
+}
+
+function toHashRoute(relativePath) {
+  return `#/${encodeURIComponent(relativePath).replace(/%2F/g, '/')}`;
+}
+
+function toStaticRoute(relativePath) {
+  const clean = normalizeSlashes(relativePath).replace(/\.md$/i, '');
+  return clean ? `${clean}/` : '';
+}
+
+function joinBasePath(basePath, routePath) {
+  const normalizedBase = normalizeBasePath(basePath);
+  const normalizedRoute = String(routePath || '').replace(/^\/+/, '');
+  if (!normalizedRoute) {
+    return normalizedBase;
+  }
+  return normalizedBase === '/' ? `/${normalizedRoute}` : `${normalizedBase}/${normalizedRoute}`;
+}
+
+function normalizeBasePath(basePath) {
+  const normalized = `/${String(basePath || '/').trim().replace(/^\/+|\/+$/g, '')}`.replace(/\/+/g, '/');
+  return normalized === '/' || normalized === '/.' ? '/' : normalized;
+}
+
 function serializeForScript(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
@@ -998,7 +1247,7 @@ export function listMarkdownFiles(rootDir) {
 function walkMarkdownFiles(currentDir, output, rootDir) {
   const entries = fs.readdirSync(currentDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') {
       continue;
     }
 
@@ -1009,14 +1258,166 @@ function walkMarkdownFiles(currentDir, output, rootDir) {
     }
 
     if (entry.isFile() && absolute.toLowerCase().endsWith('.md')) {
+      const relative = normalizeSlashes(path.relative(rootDir, absolute));
+      const stats = fs.statSync(absolute);
+      const source = fs.readFileSync(absolute, 'utf8');
+      const meta = extractWorkspaceMeta(source, absolute);
       output.push({
         absolute,
-        relative: normalizeSlashes(path.relative(rootDir, absolute)),
-        segments: normalizeSlashes(path.relative(rootDir, absolute)).split('/'),
+        relative,
+        segments: relative.split('/'),
         name: path.basename(absolute),
+        directory: path.dirname(relative) === '.' ? '' : normalizeSlashes(path.dirname(relative)),
+        title: meta.title,
+        preview: meta.preview,
+        searchText: meta.searchText,
+        modifiedAt: stats.mtimeMs,
+        size: stats.size,
       });
     }
   }
+}
+
+function extractWorkspaceMeta(source, absolutePath) {
+  const lines = source.replace(/\r\n/g, '\n').split('\n');
+  let preferredHeading = '';
+  let fallbackHeading = '';
+
+  for (const line of lines) {
+    const match = line.match(/^(#{1,6})\s+(.+)$/);
+    if (!match) {
+      continue;
+    }
+
+    const text = match[2].trim();
+    if (!text) {
+      continue;
+    }
+
+    if (!fallbackHeading) {
+      fallbackHeading = text;
+    }
+
+    if (match[1].length <= 2) {
+      preferredHeading = text;
+      break;
+    }
+  }
+
+  const title = preferredHeading || fallbackHeading || titleFromFileName(path.basename(absolutePath, '.md'));
+  const searchText = stripMarkdownForSearch(source);
+  const previewSource = searchText.toLowerCase().startsWith(title.toLowerCase())
+    ? searchText.slice(title.length).trim()
+    : searchText;
+
+  return {
+    title,
+    preview: previewSource.slice(0, 150),
+    searchText,
+  };
+}
+
+function titleFromFileName(value) {
+  return String(value)
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Untitled';
+}
+
+function resolveWorkspaceTitle(rootInput, rootDir) {
+  const resolvedInput = path.resolve(process.cwd(), rootInput || '.');
+  if (resolvedInput === process.cwd()) {
+    return path.basename(rootDir);
+  }
+
+  const relative = path.relative(process.cwd(), rootDir);
+  if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+    return normalizeSlashes(relative);
+  }
+
+  return path.basename(rootDir);
+}
+
+function toClientFileTree(files) {
+  return files.map((entry) => toClientFileEntry(entry));
+}
+
+function toClientFileEntry(entry) {
+  return {
+    relative: entry.relative,
+    segments: entry.segments,
+    name: entry.name,
+    directory: entry.directory,
+    title: entry.title,
+    preview: entry.preview,
+    searchText: entry.searchText,
+    modifiedAt: entry.modifiedAt,
+    size: entry.size,
+  };
+}
+
+function getWorkspaceFileEntry(rootDir, absolutePath) {
+  return listMarkdownFiles(rootDir).find((entry) => entry.absolute === absolutePath);
+}
+
+async function createMarkdownFile(appState, requestedPath) {
+  const target = resolveRequestedMarkdownPath(appState, requestedPath);
+  const existing = safeStat(target);
+  if (existing) {
+    throw new Error(`File already exists: ${normalizeSlashes(path.relative(appState.rootDir, target))}`);
+  }
+
+  await mkdir(path.dirname(target), { recursive: true });
+  const seededTitle = titleFromFileName(path.basename(target, '.md'));
+  await writeFile(target, `# ${seededTitle}\n`, 'utf8');
+  return target;
+}
+
+async function renameMarkdownDocument(appState, currentPath, nextPath) {
+  const currentAbsolute = getResolvedDocumentPath(appState, currentPath);
+  const nextAbsolute = resolveRequestedMarkdownPath(appState, nextPath);
+  const existing = safeStat(nextAbsolute);
+  if (existing) {
+    throw new Error(`File already exists: ${normalizeSlashes(path.relative(appState.rootDir, nextAbsolute))}`);
+  }
+
+  await mkdir(path.dirname(nextAbsolute), { recursive: true });
+  await renameFile(currentAbsolute, nextAbsolute);
+
+  const currentFeedbackPath = getFeedbackPath(currentAbsolute);
+  const nextFeedbackPath = getFeedbackPath(nextAbsolute);
+  if (safeStat(currentFeedbackPath)) {
+    await renameFile(currentFeedbackPath, nextFeedbackPath);
+  }
+
+  return nextAbsolute;
+}
+
+async function deleteMarkdownDocument(appState, requestedPath) {
+  const absolutePath = getResolvedDocumentPath(appState, requestedPath);
+  await rm(absolutePath);
+
+  const feedbackPath = getFeedbackPath(absolutePath);
+  if (safeStat(feedbackPath)) {
+    await rm(feedbackPath);
+  }
+}
+
+function resolveRequestedMarkdownPath(appState, requestedPath) {
+  const normalized = normalizeRequestedMarkdownPath(requestedPath);
+  const candidate = path.resolve(appState.rootDir, normalized);
+  ensureWithinRoot(appState.rootDir, candidate);
+  return candidate;
+}
+
+function normalizeRequestedMarkdownPath(requestedPath) {
+  const raw = String(requestedPath || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!raw) {
+    throw new Error('A file name is required.');
+  }
+
+  return raw.toLowerCase().endsWith('.md') ? raw : `${raw}.md`;
 }
 
 export function getFeedbackPath(filePath) {
@@ -1380,6 +1781,268 @@ html[data-theme="light"] .topbar {
 .viewer {
   min-width: 0;
   padding: 42px clamp(28px, 5vw, 74px) 84px;
+}
+
+.workspace-home {
+  display: none;
+}
+
+.app-shell--directory[data-route="home"] .layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell--directory[data-route="home"] .sidebar,
+.app-shell--directory[data-route="home"] .feedback-panel,
+.app-shell--directory[data-route="home"] .doc,
+.app-shell--directory[data-route="home"] .viewer-routebar,
+.app-shell--directory[data-route="home"] #searchTrigger,
+.app-shell--directory[data-route="home"] .workspace-back-chip,
+.app-shell--directory[data-route="home"] #sendFeedbackButton,
+.app-shell--directory[data-route="home"] #saveStatus,
+.app-shell--directory[data-route="home"] #saveEditButton {
+  display: none;
+}
+
+.app-shell--directory[data-route="home"] .viewer {
+  padding-top: 34px;
+}
+
+.app-shell--directory[data-route="home"] .workspace-home {
+  display: grid;
+  gap: 24px;
+}
+
+.workspace-home__hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 20px;
+  padding: clamp(24px, 5vw, 36px);
+  border: 1px solid var(--line);
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(100, 181, 167, 0.16), transparent 42%),
+    radial-gradient(circle at bottom right, rgba(255, 200, 112, 0.12), transparent 38%),
+    var(--bg-panel);
+  box-shadow: var(--shadow);
+}
+
+.workspace-home__title {
+  margin: 10px 0 12px;
+  font-size: clamp(2.4rem, 5vw, 4rem);
+  line-height: 0.96;
+  letter-spacing: -0.06em;
+}
+
+.workspace-home__subtitle {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.workspace-home__controls {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.workspace-search {
+  display: grid;
+  gap: 8px;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.workspace-search input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.workspace-sort {
+  display: inline-flex;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-muted);
+}
+
+.workspace-sort__button,
+.workspace-card__action,
+.viewer-routebar__back,
+.workspace-group__header {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg-muted);
+  color: var(--text);
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.workspace-sort__button {
+  padding: 10px 14px;
+  border-radius: 999px;
+}
+
+.workspace-sort__button.is-active,
+.workspace-sort__button:hover,
+.workspace-card__action:hover,
+.viewer-routebar__back:hover,
+.workspace-group__header:hover {
+  border-color: var(--line-strong);
+  background: rgba(100, 181, 167, 0.16);
+}
+
+.workspace-empty {
+  padding: 18px 4px 0;
+  color: var(--text-muted);
+}
+
+.workspace-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.workspace-group {
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-group__header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workspace-group__header.is-collapsed {
+  opacity: 0.8;
+}
+
+.workspace-group__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.workspace-card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    var(--bg-panel);
+  box-shadow: var(--shadow);
+}
+
+.workspace-card.is-active {
+  border-color: rgba(100, 181, 167, 0.42);
+}
+
+.workspace-card__link {
+  display: grid;
+  gap: 14px;
+  min-height: 100%;
+  padding: 20px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.workspace-card__path,
+.workspace-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 12px;
+}
+
+.workspace-card__title {
+  margin: 0;
+  font-size: 1.28rem;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+}
+
+.workspace-card__preview {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.workspace-card__preview-muted {
+  color: var(--text-muted);
+}
+
+.workspace-card__actions {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: 140ms ease;
+}
+
+.workspace-card:hover .workspace-card__actions,
+.workspace-card:focus-within .workspace-card__actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.workspace-card__action {
+  padding: 8px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.workspace-card__action.danger:hover {
+  background: rgba(255, 131, 112, 0.15);
+  border-color: rgba(255, 131, 112, 0.35);
+}
+
+.workspace-card mark {
+  background: rgba(255, 200, 112, 0.22);
+  color: inherit;
+  border-radius: 0.3em;
+  padding: 0 0.18em;
+}
+
+.viewer-routebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.viewer-routebar__back {
+  padding: 10px 14px;
+  border-radius: 999px;
+}
+
+.viewer-routebar__path {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+  text-align: right;
 }
 
 .doc {
@@ -2153,6 +2816,10 @@ h3:hover .heading-reactions {
   html[data-theme="light"] .feedback-panel {
     background: rgba(255, 252, 247, 0.98);
   }
+
+  .workspace-home__hero {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 980px) {
@@ -2209,6 +2876,19 @@ h3:hover .heading-reactions {
 
   .topbar__actions {
     flex-wrap: wrap;
+  }
+
+  .workspace-home__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-group__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .viewer-routebar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

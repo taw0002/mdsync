@@ -1,6 +1,6 @@
 {
   "name": "markdownsync",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Turn any markdown file into a beautiful, editable document in the browser",
   "type": "module",
   "bin": {

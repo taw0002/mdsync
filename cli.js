@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -42,7 +43,15 @@ async function main() {
   });
 }
 
-const isCliEntryPoint = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+const resolveArgv1 = () => {
+  if (!process.argv[1]) return null;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return path.resolve(process.argv[1]);
+  }
+};
+const isCliEntryPoint = resolveArgv1() === fs.realpathSync(__filename);
 
 if (isCliEntryPoint) {
   main().catch((error) => {

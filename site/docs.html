@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mdsync Docs</title>
+  <meta
+    name="description"
+    content="Installation, CLI reference, static build, and MCP integration docs for mdsync."
+  />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="mdsync home">
+        <span class="brand__mark">m</span>
+        <span class="brand__word">mdsync</span>
+      </a>
+      <div class="site-header__actions">
+        <a class="button button--ghost" href="./docs.html" aria-current="page">Docs</a>
+        <a class="button button--ghost" href="https://www.npmjs.com/package/markdownsync" target="_blank" rel="noreferrer">npm</a>
+        <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">GitHub</a>
+        <button class="button button--ghost" type="button" data-theme-toggle="true">Light mode</button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero docs-hero reveal is-visible">
+        <div class="hero__copy">
+          <div class="eyebrow">Docs</div>
+          <h1>Command reference and MCP setup.</h1>
+          <p class="hero__lede">
+            mdsync has four jobs: render one file, browse a docs folder, build a static site, and let MCP clients read and
+            update markdown on disk. This page covers the commands, flags, config, and common workflows.
+          </p>
+          <div class="hero__actions">
+            <a class="button button--primary" href="#installation">Install</a>
+            <a class="button button--ghost" href="#mcp-integration">MCP setup</a>
+          </div>
+          <div class="install-card">
+            <div class="eyebrow">Quick start</div>
+            <div class="install-card__command">
+              <code id="installCommand">npx markdownsync README.md</code>
+              <button class="button button--ghost button--small" type="button" data-copy-target="#installCommand">Copy</button>
+            </div>
+          </div>
+        </div>
+        <div class="hero__panel">
+          <div class="spotlight-card">
+            <div class="spotlight-card__label">What it does</div>
+            <div class="spotlight-card__title">One CLI. Four ways to use it.</div>
+            <p>
+              Use it as a live markdown viewer, a directory browser, a static site generator, or an MCP server for agents.
+              The same files stay on disk the whole time.
+            </p>
+            <div class="spotlight-card__meta">
+              <span><code>mdsync README.md</code></span>
+              <span><code>mdsync ./docs</code></span>
+              <span><code>mdsync build ./docs --out ./site</code></span>
+              <span><code>mdsync mcp</code></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="docs-layout reveal">
+        <aside class="docs-nav">
+          <h2 class="docs-nav__title">On this page</h2>
+          <ul>
+            <li><a href="#installation">Installation</a></li>
+            <li><a href="#cli-reference">CLI reference</a></li>
+            <li><a href="#single-file-mode">Single file mode</a></li>
+            <li><a href="#directory-mode">Directory mode</a></li>
+            <li><a href="#static-build">Static build</a></li>
+            <li><a href="#mcp-integration">MCP integration</a></li>
+            <li><a href="#examples-and-recipes">Examples and recipes</a></li>
+          </ul>
+        </aside>
+
+        <div class="docs-content">
+          <article class="doc">
+            <section id="installation">
+              <h2>Installation</h2>
+              <p>
+                Use <code>npx</code> when you want a one-off run. Install globally when you use it often.
+              </p>
+              <pre><code class="language-bash">npx markdownsync README.md
+
+npm install -g markdownsync
+mdsync README.md</code></pre>
+            </section>
+
+            <section id="cli-reference">
+              <h2>CLI reference</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Command</th>
+                    <th>What it does</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>mdsync &lt;file-or-directory&gt;</code></td>
+                    <td>Start live mode. Files open as a single document. Directories open as a docs workspace.</td>
+                  </tr>
+                  <tr>
+                    <td><code>mdsync view &lt;file-or-directory&gt;</code></td>
+                    <td>Explicit form of live mode.</td>
+                  </tr>
+                  <tr>
+                    <td><code>mdsync serve &lt;directory&gt;</code></td>
+                    <td>Force directory mode.</td>
+                  </tr>
+                  <tr>
+                    <td><code>mdsync build &lt;directory&gt; --out &lt;directory&gt;</code></td>
+                    <td>Generate a static HTML site from a markdown folder.</td>
+                  </tr>
+                  <tr>
+                    <td><code>mdsync mcp</code></td>
+                    <td>Start the MCP server over stdio.</td>
+                  </tr>
+                  <tr>
+                    <td><code>mdsync --help</code></td>
+                    <td>Print usage.</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h3>Live mode flags</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Flag</th>
+                    <th>What it does</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>--port</code>, <code>-p</code></td>
+                    <td>Choose the HTTP port. Default is <code>3456</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--light</code></td>
+                    <td>Start the viewer in light mode.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--no-edit</code></td>
+                    <td>Disable browser editing and keep the session read-only.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--no-open</code></td>
+                    <td>Start the server without opening a browser tab.</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h3>Build flags</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Flag</th>
+                    <th>What it does</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>--out &lt;dir&gt;</code></td>
+                    <td>Output directory for the generated site.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--title "My Docs"</code></td>
+                    <td>Override the generated site title.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--base /docs</code></td>
+                    <td>Set the base path for static hosting under a subdirectory.</td>
+                  </tr>
+                  <tr>
+                    <td><code>--theme dark|light|auto</code></td>
+                    <td>Choose the default theme for the built site.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section id="single-file-mode">
+              <h2>Single file mode</h2>
+              <p>
+                Point mdsync at a markdown file and it opens a rendered document in the browser. Edits sync both ways:
+                change the file on disk and the browser updates, or edit in the browser and the markdown file is rewritten.
+              </p>
+              <pre><code class="language-bash">mdsync README.md
+mdsync ./notes/today.md --port 8080
+mdsync ./draft.md --light --no-open</code></pre>
+              <div class="docs-callout">
+                <p>
+                  Browser editing is enabled by default. Use <code>--no-edit</code> when you want a read-only session for
+                  review, presentations, or demos.
+                </p>
+              </div>
+            </section>
+
+            <section id="directory-mode">
+              <h2>Directory mode</h2>
+              <p>
+                Point mdsync at a directory to turn a folder of markdown files into a browsable workspace. It indexes the
+                folder, opens the first markdown file it finds, and watches for changes across the workspace.
+              </p>
+              <pre><code class="language-bash">mdsync ./docs
+mdsync serve ./docs
+mdsync ./knowledge-base --no-edit</code></pre>
+              <p>Directory mode is the fastest way to review or clean up a docs tree, notes folder, or AI-generated batch of markdown files.</p>
+            </section>
+
+            <section id="static-build">
+              <h2>Static build</h2>
+              <p>
+                Use the same markdown folder to generate a deployable static site. The output is self-contained HTML, so you
+                can ship it to any static host without a framework or theme system.
+              </p>
+              <pre><code class="language-bash">mdsync build ./docs --out ./site
+mdsync build ./docs --out ./public --title "Team Docs"
+mdsync build ./docs --out ./dist --base /docs --theme dark</code></pre>
+            </section>
+
+            <section id="mcp-integration">
+              <h2>MCP integration</h2>
+              <p>
+                Run <code>mdsync mcp</code> to expose your markdown files through MCP tools. This is the agent loop:
+                open a file, read it, inspect feedback, update it, write it back.
+              </p>
+              <pre><code class="language-bash">mdsync mcp
+npx -y markdownsync mcp</code></pre>
+
+              <h3>Claude Desktop</h3>
+              <p>On macOS, add this to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>.</p>
+              <pre><code class="language-json">{
+  "mcpServers": {
+    "mdsync": {
+      "command": "npx",
+      "args": ["-y", "markdownsync", "mcp"]
+    }
+  }
+}</code></pre>
+
+              <h3>Cursor</h3>
+              <p>Add this to <code>~/.cursor/mcp.json</code> or project-local <code>.cursor/mcp.json</code>.</p>
+              <pre><code class="language-json">{
+  "mcpServers": {
+    "mdsync": {
+      "command": "npx",
+      "args": ["-y", "markdownsync", "mcp"]
+    }
+  }
+}</code></pre>
+
+              <h3>OpenClaw</h3>
+              <p>If your OpenClaw install reads <code>mcp.servers</code>, add this block to that config.</p>
+              <pre><code class="language-json">{
+  "mcp": {
+    "servers": {
+      "mdsync": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "markdownsync", "mcp"]
+      }
+    }
+  }
+}</code></pre>
+
+              <h3>Tool reference</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tool</th>
+                    <th>Params</th>
+                    <th>What it returns</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>present</code></td>
+                    <td><code>path: string</code></td>
+                    <td>Opens a markdown file or directory in the browser and returns the viewer URL, file path, and feedback path.</td>
+                  </tr>
+                  <tr>
+                    <td><code>get_document</code></td>
+                    <td><code>path: string</code></td>
+                    <td>Returns the current markdown content for a file.</td>
+                  </tr>
+                  <tr>
+                    <td><code>get_feedback</code></td>
+                    <td><code>path: string</code></td>
+                    <td>Returns the structured feedback JSON stored next to the markdown file.</td>
+                  </tr>
+                  <tr>
+                    <td><code>write_document</code></td>
+                    <td><code>path: string</code>, <code>content: string</code></td>
+                    <td>Writes markdown back to disk and returns a confirmation object with the resolved path.</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div class="docs-callout">
+                <p>
+                  Tool paths are resolved relative to the directory where you start <code>mdsync mcp</code>. Start it from the
+                  repo or workspace you want the agent to work inside.
+                </p>
+              </div>
+            </section>
+
+            <section id="examples-and-recipes">
+              <h2>Examples and recipes</h2>
+
+              <h3>Review one README</h3>
+              <pre><code class="language-bash">mdsync README.md</code></pre>
+
+              <h3>Browse an entire docs folder without editing</h3>
+              <pre><code class="language-bash">mdsync ./docs --no-edit</code></pre>
+
+              <h3>Build and deploy a docs site under a subpath</h3>
+              <pre><code class="language-bash">mdsync build ./docs --out ./public --base /docs
+netlify deploy --dir ./public --prod</code></pre>
+
+              <h3>Let an MCP client update markdown in your repo</h3>
+              <pre><code class="language-bash">cd /path/to/repo
+mdsync mcp</code></pre>
+              <p>
+                After that, the client can call <code>get_document</code>, edit the content locally, and send the full
+                replacement through <code>write_document</code>.
+              </p>
+            </section>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing reveal">
+        <div class="closing__copy">
+          <div class="eyebrow">Same files, different modes</div>
+          <h2>Use the markdown you already have.</h2>
+          <p>Preview it live, edit it in the browser, build it to static HTML, or wire it into an MCP client. Nothing to migrate.</p>
+        </div>
+        <div class="closing__actions">
+          <a class="button button--primary" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">GitHub</a>
+          <a class="button button--ghost" href="#top">Back to top</a>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="status-toast" id="statusToast" hidden></div>
+  <script src="./site.js"></script>
+</body>
+</html>

@@ -19,6 +19,7 @@
         <span class="brand__word">mdsync</span>
       </a>
       <div class="site-header__actions">
+        <a class="button button--ghost" href="./docs.html">Docs</a>
         <a class="button button--ghost" href="https://www.npmjs.com/package/markdownsync" target="_blank" rel="noreferrer">npm</a>
         <a class="button button--ghost" href="https://github.com/taw0002/mdsync" target="_blank" rel="noreferrer">GitHub</a>
         <button class="button button--ghost" type="button" data-theme-toggle="true">Light mode</button>
@@ -43,7 +44,7 @@
             <div class="eyebrow">Try it now</div>
             <div class="install-card__command">
               <code id="installCommand">npx markdownsync README.md</code>
-              <button class="button button--ghost button--small" type="button" data-copy-command="true">Copy</button>
+              <button class="button button--ghost button--small" type="button" data-copy-target="#installCommand">Copy</button>
             </div>
           </div>
         </div>
@@ -131,7 +132,7 @@
       </section>
     </main>
   </div>
-
-
+  <div class="status-toast" id="statusToast" hidden></div>
+  <script src="./site.js"></script>
 </body>
 </html>

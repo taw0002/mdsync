@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,7 +19,7 @@ let viewerSession = null;
 
 export async function startMcpServer() {
   const server = new McpServer({
-    name: 'mdview',
+    name: 'mdsync',
     version: '0.2.0',
   });
 
@@ -91,6 +92,28 @@ export async function startMcpServer() {
         {
           type: 'text',
           text: content,
+        },
+      ],
+    };
+  });
+
+  server.registerTool('write_document', {
+    description: 'Write markdown content to a document on disk.',
+    inputSchema: {
+      path: z.string().describe('Path to the markdown file'),
+      content: z.string().describe('Full markdown content to write'),
+    },
+  }, async ({ path: inputPath, content }) => {
+    const resolvedPath = path.resolve(process.cwd(), inputPath);
+    await writeFile(resolvedPath, content, 'utf8');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            path: resolvedPath,
+          }, null, 2),
         },
       ],
     };

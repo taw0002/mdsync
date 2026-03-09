@@ -946,6 +946,99 @@ html[data-theme="light"] .doc-frame__inner {
   font-size: clamp(2rem, 4vw, 3.2rem);
 }
 
+.button[aria-current="page"] {
+  border-color: rgba(100, 181, 167, 0.42);
+  background: linear-gradient(180deg, rgba(100, 181, 167, 0.2), rgba(100, 181, 167, 0.08));
+}
+
+.docs-hero {
+  padding-bottom: 26px;
+}
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.docs-nav,
+.docs-callout {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.018)),
+    var(--bg-panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.docs-nav {
+  position: sticky;
+  top: 92px;
+  padding: 18px;
+}
+
+.docs-nav__title {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.docs-nav ul {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.docs-nav a {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 14px;
+  text-decoration: none;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.docs-nav a:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--bg-muted);
+}
+
+.docs-content {
+  min-width: 0;
+}
+
+.docs-content .doc {
+  min-height: auto;
+}
+
+.docs-content section {
+  scroll-margin-top: 110px;
+}
+
+.docs-content h1 {
+  font-size: clamp(3rem, 6vw, 4.6rem);
+}
+
+.docs-content h2:first-of-type {
+  margin-top: 0.4em;
+}
+
+.docs-callout {
+  margin: 1.4em 0;
+  padding: 18px 20px;
+}
+
+.docs-callout p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
 .reveal {
   opacity: 0;
   transform: translateY(24px);
@@ -960,7 +1053,8 @@ html[data-theme="light"] .doc-frame__inner {
 @media (max-width: 1100px) {
   .hero,
   .demo-shell,
-  .closing {
+  .closing,
+  .docs-layout {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
@@ -978,6 +1072,10 @@ html[data-theme="light"] .doc-frame__inner {
   .demo-hint {
     text-align: left;
   }
+
+  .docs-nav {
+    position: static;
+  }
 }
 
 @media (max-width: 780px) {
@@ -992,7 +1090,7 @@ html[data-theme="light"] .doc-frame__inner {
   }
 
   .site-header__actions {
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   .hero {
@@ -1023,6 +1121,11 @@ html[data-theme="light"] .doc-frame__inner {
   .doc {
     min-height: 720px;
     padding: 24px 18px 34px;
+  }
+
+  .docs-nav,
+  .docs-callout {
+    border-radius: 20px;
   }
 
   .ProseMirror {

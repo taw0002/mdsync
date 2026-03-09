@@ -12,17 +12,27 @@ import { common, createLowlight } from 'lowlight';
 import { Markdown } from 'tiptap-markdown';
 
 const state = window.__MDVIEW__;
+const appShell = document.querySelector('.app-shell');
 const layout = document.getElementById('layout');
 const docRoot = document.getElementById('docRoot');
 const tocRoot = document.getElementById('toc');
 const pageTitle = document.getElementById('pageTitle');
-const fileTreeRoot = document.getElementById('fileTree');
+const routeEyebrow = document.getElementById('routeEyebrow');
 const themeToggle = document.getElementById('themeToggle');
 const searchTrigger = document.getElementById('searchTrigger');
 const searchPalette = document.getElementById('searchPalette');
 const searchInput = document.getElementById('searchInput');
 const searchResults = document.getElementById('searchResults');
 const sidebarToggle = document.getElementById('sidebarToggle');
+const workspaceHome = document.getElementById('workspaceHome');
+const workspaceGroups = document.getElementById('workspaceGroups');
+const workspaceEmpty = document.getElementById('workspaceEmpty');
+const workspaceSearchInput = document.getElementById('workspaceSearchInput');
+const workspaceSort = document.getElementById('workspaceSort');
+const workspaceNewFileButton = document.getElementById('workspaceNewFileButton');
+const workspaceBackButton = document.getElementById('workspaceBackButton');
+const viewerBackButton = document.getElementById('viewerBackButton');
+const viewerBreadcrumb = document.getElementById('viewerBreadcrumb');
 const feedbackList = document.getElementById('feedbackList');
 const feedbackCount = document.getElementById('feedbackCount');
 const feedbackMeta = document.getElementById('feedbackMeta');
@@ -67,18 +77,34 @@ let toastTimer = null;
 let pendingDecorateFrame = 0;
 let dirty = false;
 let saveInFlight = false;
+let currentRoute = state.initialRoute || (state.mode === 'directory' ? 'home' : 'file');
+let workspaceSearchQuery = '';
+let workspaceSortMode = 'alpha';
+const collapsedFolders = new Map();
+let suppressHashChange = false;
 
 applyStoredTheme();
 init();
 
 function init() {
-  renderFromDoc(currentDoc);
-  renderFeedback(feedbackState);
   bindEvents();
+  if (currentDoc) {
+    renderFromDoc(currentDoc);
+  } else {
+    syncRouteChrome();
+  }
+  renderFeedback(feedbackState);
+  renderWorkspace();
   syncSaveState();
   syncThemeWithDocument();
-  hydrateFromHash();
-  connectSocket();
+  if (state.mode === 'directory' && state.runtime === 'live') {
+    hydrateFromHash();
+  } else {
+    syncRouteChrome();
+  }
+  if (state.runtime === 'live') {
+    connectSocket();
+  }
 }
 
 function bindEvents() {
@@ -86,19 +112,73 @@ function bindEvents() {
   searchTrigger?.addEventListener('click', openSearch);
   sidebarToggle?.addEventListener('click', () => layout.classList.toggle('sidebar-open'));
   sendFeedbackButton?.addEventListener('click', sendFeedback);
+  workspaceNewFileButton?.addEventListener('click', createNewWorkspaceFile);
+  workspaceBackButton?.addEventListener('click', () => {
+    void navigateHome(true);
+  });
+  viewerBackButton?.addEventListener('click', () => {
+    void navigateHome(true);
+  });
   saveEditButton?.addEventListener('click', async () => {
     await saveDocument();
+  });
+  workspaceSearchInput?.addEventListener('input', () => {
+    workspaceSearchQuery = workspaceSearchInput.value;
+    renderWorkspace();
+  });
+  workspaceSort?.querySelectorAll('[data-sort]').forEach((button) => {
+    button.addEventListener('click', () => {
+      workspaceSortMode = button.dataset.sort || 'alpha';
+      renderWorkspace();
+    });
+  });
+  workspaceGroups?.addEventListener('click', async (event) => {
+    const folderToggle = event.target.closest('[data-folder-toggle]');
+    if (folderToggle) {
+      const folderName = folderToggle.dataset.folderToggle || '';
+      collapsedFolders.set(folderName, !collapsedFolders.get(folderName));
+      renderWorkspace();
+      return;
+    }
+
+    const action = event.target.closest('[data-workspace-action]');
+    if (action) {
+      event.preventDefault();
+      event.stopPropagation();
+      const relativePath = action.dataset.filePath;
+      if (!relativePath) {
+        return;
+      }
+
+      if (action.dataset.workspaceAction === 'rename') {
+        await renameWorkspaceFile(relativePath);
+      } else if (action.dataset.workspaceAction === 'delete') {
+        await deleteWorkspaceFile(relativePath);
+      }
+      return;
+    }
+
+    const card = event.target.closest('[data-open-file]');
+    if (card) {
+      event.preventDefault();
+      await navigateToDocument(card.dataset.openFile, true);
+    }
   });
 
   document.addEventListener('keydown', async (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
+      if (state.mode === 'directory' && currentRoute === 'home' && workspaceSearchInput) {
+        workspaceSearchInput.focus();
+        workspaceSearchInput.select();
+        return;
+      }
       openSearch();
       return;
     }
 
     if (event.key === 'Escape') {
-      if (!searchPalette.classList.contains('hidden')) {
+      if (searchPalette && !searchPalette.classList.contains('hidden')) {
         closeSearch();
         return;
       }
@@ -128,7 +208,7 @@ function bindEvents() {
     event.returnValue = '';
   });
 
-  searchPalette.addEventListener('click', (event) => {
+  searchPalette?.addEventListener('click', (event) => {
     if (event.target.dataset.closeSearch === 'true') {
       closeSearch();
     }
@@ -140,12 +220,12 @@ function bindEvents() {
     }
   });
 
-  searchInput.addEventListener('input', () => {
+  searchInput?.addEventListener('input', () => {
     selectedResult = 0;
     renderSearchResults(searchInput.value);
   });
 
-  searchInput.addEventListener('keydown', (event) => {
+  searchInput?.addEventListener('keydown', (event) => {
     const buttons = [...searchResults.querySelectorAll('.search-result')];
     if (event.key === 'ArrowDown') {
       event.preventDefault();
@@ -244,11 +324,11 @@ function bindEvents() {
     }
   });
 
-  window.addEventListener('popstate', async (event) => {
-    if (event.state?.path) {
-      await loadDocument(event.state.path, false);
-    }
-  });
+  if (state.mode === 'directory' && state.runtime === 'live') {
+    window.addEventListener('hashchange', () => {
+      void handleHashRouteChange();
+    });
+  }
 
   window.addEventListener('resize', () => {
     syncFloatingToolbar();
@@ -264,6 +344,10 @@ function bindEvents() {
 }
 
 function renderFromDoc(doc) {
+  if (!doc) {
+    return;
+  }
+
   const blocks = (doc.blocks || []).map((block) => ({
     ...block,
     previewHtml: renderSearchPreview(block.markdown),
@@ -274,10 +358,9 @@ function renderFromDoc(doc) {
     blocks,
     markdown: buildDocumentMarkdown(blocks, doc.lineCount),
   };
-  pageTitle.textContent = currentDoc.title;
-  document.title = currentDoc.title;
-  renderFiles(state.fileTree || []);
-  mountDocumentEditor(currentDoc.markdown);
+  mountDocument(currentDoc);
+  syncRouteChrome();
+  renderWorkspace();
   clearSearchHighlights();
 }
 
@@ -287,37 +370,423 @@ function renderToc(items) {
   )).join('');
 }
 
-function renderFiles(files) {
-  if (!fileTreeRoot) {
+function mountDocument(doc) {
+  if (state.runtime === 'static') {
+    destroyEditor();
+    closeComposer();
+    docRoot.innerHTML = doc.html || '';
+    renderToc(doc.toc || []);
+    scheduleDecorateDocument();
     return;
   }
 
-  fileTreeRoot.innerHTML = files.map((entry) => {
-    const active = entry.relative === currentDoc.relativePath ? ' is-active' : '';
-    return `<button class="${active.trim()}" data-file-path="${escapeAttribute(entry.relative)}">${escapeHtml(entry.relative)}</button>`;
-  }).join('');
+  mountDocumentEditor(doc.markdown);
+}
 
-  fileTreeRoot.querySelectorAll('button[data-file-path]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      layout.classList.remove('sidebar-open');
-      await loadDocument(button.dataset.filePath, true);
-    });
+function syncRouteChrome() {
+  const isDirectoryHome = state.mode === 'directory' && currentRoute === 'home';
+  appShell?.setAttribute('data-route', currentRoute);
+  layout?.setAttribute('data-route', currentRoute);
+  if (routeEyebrow) {
+    routeEyebrow.textContent = state.mode === 'directory'
+      ? (isDirectoryHome ? 'Workspace' : 'Document')
+      : 'Single file';
+  }
+
+  const nextTitle = isDirectoryHome ? state.workspaceTitle : (currentDoc?.title || state.workspaceTitle);
+  if (pageTitle) {
+    pageTitle.textContent = nextTitle;
+  }
+  document.title = nextTitle;
+
+  if (workspaceBackButton) {
+    workspaceBackButton.hidden = state.mode !== 'directory' || currentRoute !== 'file';
+  }
+  if (viewerBackButton) {
+    viewerBackButton.hidden = state.mode !== 'directory' || currentRoute !== 'file';
+  }
+  if (searchTrigger) {
+    searchTrigger.hidden = isDirectoryHome;
+  }
+  if (viewerBreadcrumb) {
+    viewerBreadcrumb.textContent = currentDoc?.relativePath || '';
+  }
+}
+
+function renderWorkspace() {
+  if (!workspaceGroups) {
+    return;
+  }
+
+  const files = Array.isArray(state.fileTree) ? state.fileTree : [];
+  const tokens = workspaceSearchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleFiles = files.filter((entry) => matchesWorkspaceSearch(entry, tokens));
+  const grouped = groupWorkspaceFiles(visibleFiles).map((group) => ({
+    ...group,
+    files: sortWorkspaceFiles(group.files),
+  }));
+
+  workspaceEmpty.hidden = visibleFiles.length > 0;
+  workspaceSort?.querySelectorAll('[data-sort]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.sort === workspaceSortMode);
+  });
+
+  workspaceGroups.innerHTML = grouped.map((group) => {
+    const collapsed = group.name !== '' && collapsedFolders.get(group.name);
+    const label = group.name || 'Root files';
+    return `
+      <section class="workspace-group" data-group-name="${escapeAttribute(group.name)}">
+        <button class="workspace-group__header ${collapsed ? 'is-collapsed' : ''}" type="button" data-folder-toggle="${escapeAttribute(group.name)}">
+          <span>${escapeHtml(label)}</span>
+          <span>${group.files.length}</span>
+        </button>
+        <div class="workspace-group__grid" ${collapsed ? 'hidden' : ''}>
+          ${group.files.map((entry) => renderWorkspaceCard(entry, tokens)).join('')}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderWorkspaceCard(entry, tokens) {
+  const active = currentRoute === 'file' && currentDoc?.relativePath === entry.relative ? ' is-active' : '';
+  const href = workspaceFileHref(entry.relative);
+  const preview = highlightWorkspaceText(entry.preview || entry.searchText || '', tokens);
+  const title = highlightWorkspaceText(entry.title || entry.name, tokens);
+  const relative = highlightWorkspaceText(entry.relative, tokens);
+  const actions = state.runtime === 'live' && state.editable ? `
+    <div class="workspace-card__actions">
+      <button class="workspace-card__action" type="button" data-workspace-action="rename" data-file-path="${escapeAttribute(entry.relative)}">Rename</button>
+      <button class="workspace-card__action danger" type="button" data-workspace-action="delete" data-file-path="${escapeAttribute(entry.relative)}">Delete</button>
+    </div>
+  ` : '';
+
+  return `
+    <article class="workspace-card${active}">
+      ${actions}
+      <a class="workspace-card__link" href="${escapeAttribute(href)}" data-open-file="${escapeAttribute(entry.relative)}">
+        <div class="workspace-card__path">${relative}</div>
+        <h3 class="workspace-card__title">${title}</h3>
+        <p class="workspace-card__preview">${preview || '<span class="workspace-card__preview-muted">No preview available.</span>'}</p>
+        <div class="workspace-card__meta">
+          <span>${escapeHtml(formatRelativeDate(entry.modifiedAt))}</span>
+          <span>${escapeHtml(formatBytes(entry.size))}</span>
+        </div>
+      </a>
+    </article>
+  `;
+}
+
+function groupWorkspaceFiles(files) {
+  const groups = new Map();
+  for (const entry of files) {
+    const key = entry.directory || '';
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(entry);
+  }
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => {
+      if (left === '') {
+        return -1;
+      }
+      if (right === '') {
+        return 1;
+      }
+      return left.localeCompare(right);
+    })
+    .map(([name, groupFiles]) => ({ name, files: groupFiles }));
+}
+
+function sortWorkspaceFiles(files) {
+  return [...files].sort((left, right) => {
+    if (workspaceSortMode === 'recent') {
+      if (right.modifiedAt !== left.modifiedAt) {
+        return right.modifiedAt - left.modifiedAt;
+      }
+      return left.relative.localeCompare(right.relative);
+    }
+
+    return left.relative.localeCompare(right.relative);
   });
 }
 
+function matchesWorkspaceSearch(entry, tokens) {
+  if (tokens.length === 0) {
+    return true;
+  }
+
+  const haystack = `${entry.relative} ${entry.title} ${entry.searchText}`.toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
+function highlightWorkspaceText(text, tokens) {
+  const source = String(text || '');
+  if (tokens.length === 0) {
+    return escapeHtml(source);
+  }
+
+  const pattern = tokens
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+
+  if (!pattern) {
+    return escapeHtml(source);
+  }
+
+  return escapeHtml(source).replace(new RegExp(`(${pattern})`, 'ig'), '<mark>$1</mark>');
+}
+
+function workspaceFileHref(relativePath) {
+  if (state.runtime === 'static') {
+    return joinBasePath(state.staticBasePath, `${relativePath.replace(/\.md$/i, '')}/`);
+  }
+
+  return `#/${encodeURIComponent(relativePath).replace(/%2F/g, '/')}`;
+}
+
+async function createNewWorkspaceFile() {
+  const value = window.prompt('New markdown file name', 'notes.md');
+  if (!value) {
+    return;
+  }
+
+  const response = await fetch('/api/files', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      path: value,
+      theme: currentTheme(),
+    }),
+  });
+
+  if (!response.ok) {
+    showToast('Unable to create file');
+    return;
+  }
+
+  const payload = await response.json();
+  await refreshWorkspaceFiles();
+  await navigateToDocument(payload.doc.relativePath, true, { doc: payload.doc, focusEditor: true });
+}
+
+async function renameWorkspaceFile(relativePath) {
+  const value = window.prompt('Rename file', relativePath);
+  if (!value || value === relativePath) {
+    return;
+  }
+
+  const response = await fetch('/api/files', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      path: relativePath,
+      nextPath: value,
+    }),
+  });
+
+  if (!response.ok) {
+    showToast('Unable to rename file');
+    return;
+  }
+
+  await refreshWorkspaceFiles();
+}
+
+async function deleteWorkspaceFile(relativePath) {
+  if (!window.confirm(`Delete ${relativePath}?`)) {
+    return;
+  }
+
+  const response = await fetch(`/api/files?path=${encodeURIComponent(relativePath)}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    showToast('Unable to delete file');
+    return;
+  }
+
+  if (currentDoc?.relativePath === relativePath) {
+    currentDoc = null;
+  }
+  await refreshWorkspaceFiles();
+  renderWorkspace();
+}
+
+async function refreshWorkspaceFiles() {
+  if (state.runtime !== 'live' || state.mode !== 'directory') {
+    return;
+  }
+
+  const response = await fetch('/api/files');
+  if (!response.ok) {
+    return;
+  }
+
+  const payload = await response.json();
+  state.fileTree = payload.files;
+  renderWorkspace();
+}
+
+async function hydrateFromHash() {
+  if (state.mode !== 'directory' || state.runtime !== 'live') {
+    syncRouteChrome();
+    return;
+  }
+
+  if (!location.hash) {
+    history.replaceState(null, '', '#/');
+  }
+
+  await handleHashRouteChange();
+}
+
+async function handleHashRouteChange() {
+  if (suppressHashChange) {
+    suppressHashChange = false;
+    return;
+  }
+
+  const hash = location.hash || '#/';
+  if (hash === '#/' || hash === '#') {
+    await navigateHome(false);
+    return;
+  }
+
+  if (!hash.startsWith('#/')) {
+    await navigateHome(false);
+    return;
+  }
+
+  const nextPath = decodeURIComponent(hash.slice(2));
+  if (!nextPath) {
+    await navigateHome(false);
+    return;
+  }
+
+  await navigateToDocument(nextPath, false, { fromHashChange: true });
+}
+
+async function navigateHome(updateHash = false) {
+  if (state.mode !== 'directory') {
+    return true;
+  }
+
+  if (!confirmDiscardChanges()) {
+    return false;
+  }
+
+  if (isDirty() && currentDoc) {
+    dirty = false;
+    renderFromDoc(currentDoc);
+  }
+
+  closeComposer();
+  currentRoute = 'home';
+  syncRouteChrome();
+  renderWorkspace();
+
+  if (updateHash && state.runtime === 'live') {
+    const nextHash = '#/';
+    if (location.hash !== nextHash) {
+      suppressHashChange = true;
+      location.hash = nextHash;
+    }
+  }
+
+  return true;
+}
+
+async function navigateToDocument(relativePath, updateHash = true, options = {}) {
+  if (!relativePath) {
+    return false;
+  }
+
+  if (state.runtime === 'static') {
+    if (options.doc) {
+      currentRoute = 'file';
+      state.currentPath = options.doc.relativePath;
+      renderFromDoc(options.doc);
+      return true;
+    }
+    window.location.href = workspaceFileHref(relativePath);
+    return true;
+  }
+
+  if (!confirmDiscardChanges()) {
+    return false;
+  }
+
+  if (isDirty() && currentDoc) {
+    dirty = false;
+    renderFromDoc(currentDoc);
+  }
+
+  closeComposer();
+  const sameDocument = currentDoc?.relativePath === relativePath;
+  const nextDoc = options.doc || (sameDocument ? currentDoc : await fetchDocument(relativePath));
+  if (!nextDoc) {
+    if (!options.fromHashChange) {
+      showToast('Unable to load document');
+    }
+    return false;
+  }
+
+  currentRoute = 'file';
+  state.currentPath = nextDoc.relativePath;
+  renderFromDoc(nextDoc);
+  await loadFeedback();
+
+  if (updateHash && state.runtime === 'live') {
+    const nextHash = workspaceFileHref(relativePath);
+    if (location.hash !== nextHash) {
+      suppressHashChange = true;
+      location.hash = nextHash;
+    }
+  }
+
+  if (options.focusEditor && activeEditor) {
+    requestAnimationFrame(() => activeEditor.commands.focus('start'));
+  }
+
+  requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+  return true;
+}
+
+async function fetchDocument(relativePath) {
+  const response = await fetch(`/api/doc?path=${encodeURIComponent(relativePath)}&theme=${encodeURIComponent(currentTheme())}`);
+  if (!response.ok) {
+    return null;
+  }
+  return response.json();
+}
+
 function renderFeedback(feedback) {
-  feedbackState = feedback;
-  feedbackCount.textContent = String(feedback.changes.length);
-  feedbackMeta.textContent = feedback.reviewedAt
-    ? `Reviewed ${new Date(feedback.reviewedAt).toLocaleString()}`
+  feedbackState = feedback || { changes: [], reviewedAt: null };
+  if (!feedbackCount || !feedbackMeta || !feedbackList) {
+    return;
+  }
+
+  feedbackCount.textContent = String(feedbackState.changes.length);
+  feedbackMeta.textContent = feedbackState.reviewedAt
+    ? `Reviewed ${new Date(feedbackState.reviewedAt).toLocaleString()}`
     : 'Changes, comments, approvals, and rejections live here.';
 
-  if (feedback.changes.length === 0) {
+  if (feedbackState.changes.length === 0) {
     feedbackList.innerHTML = '<div class="feedback-empty">No feedback yet. Select text or react to a section to add structured notes.</div>';
     return;
   }
 
-  feedbackList.innerHTML = feedback.changes.map((change) => {
+  feedbackList.innerHTML = feedbackState.changes.map((change) => {
     const badge = changeLabel(change.type);
     const body = feedbackBody(change);
     return `
@@ -440,43 +909,6 @@ function decorateDocument() {
   syncBlockToolbar();
 }
 
-async function hydrateFromHash() {
-  if (state.mode !== 'directory' || !location.hash.startsWith('#file=')) {
-    return;
-  }
-
-  const nextPath = decodeURIComponent(location.hash.slice('#file='.length));
-  if (nextPath && nextPath !== currentDoc.relativePath) {
-    await loadDocument(nextPath, false);
-  }
-}
-
-async function loadDocument(relativePath, pushHistory = false) {
-  if (!confirmDiscardChanges()) {
-    return false;
-  }
-
-  closeComposer();
-  const scroll = window.scrollY;
-  const response = await fetch(`/api/doc?path=${encodeURIComponent(relativePath)}&theme=${encodeURIComponent(currentTheme())}`);
-  if (!response.ok) {
-    showToast('Unable to load document');
-    return false;
-  }
-
-  const doc = await response.json();
-  renderFromDoc(doc);
-  state.currentPath = doc.relativePath;
-  await loadFeedback();
-
-  if (pushHistory) {
-    history.pushState({ path: relativePath, scroll }, '', `#file=${encodeURIComponent(relativePath)}`);
-  }
-
-  requestAnimationFrame(() => window.scrollTo({ top: 0 }));
-  return true;
-}
-
 function connectSocket() {
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss://' : 'ws://'}${location.host}/ws`);
 
@@ -497,8 +929,12 @@ function connectSocket() {
 
     if (payload.type === 'directory-changed') {
       state.fileTree = payload.files;
-      renderFiles(state.fileTree);
+      renderWorkspace();
       const changedRelative = toRelativePath(payload.path);
+      if (state.currentPath && !state.fileTree.some((entry) => entry.relative === state.currentPath)) {
+        currentRoute = 'home';
+        syncRouteChrome();
+      }
       if (!isDirty() && changedRelative === state.currentPath) {
         await refreshCurrentDocument(true);
       }
@@ -523,12 +959,11 @@ async function refreshCurrentDocument(preserveScroll) {
   }
 
   const scroll = window.scrollY;
-  const response = await fetch(`/api/doc?path=${encodeURIComponent(state.currentPath)}&theme=${encodeURIComponent(currentTheme())}`);
-  if (!response.ok) {
+  const nextDoc = await fetchDocument(state.currentPath);
+  if (!nextDoc) {
     return;
   }
 
-  const nextDoc = await response.json();
   renderFromDoc(nextDoc);
   if (preserveScroll) {
     requestAnimationFrame(() => window.scrollTo({ top: scroll }));
@@ -672,7 +1107,7 @@ function normalizeSerializedMarkdown(markdown) {
 }
 
 function getEditorRoot() {
-  return activeEditor?.editor?.view?.dom || null;
+  return activeEditor?.editor?.view?.dom || docRoot || null;
 }
 
 function getEditorMarkdown() {
@@ -1274,6 +1709,10 @@ function handleHeadingReaction(block, type, trigger) {
 }
 
 async function submitFeedbackChange(payload) {
+  if (!state.feedbackEnabled) {
+    return;
+  }
+
   const response = await fetch('/api/feedback', {
     method: 'POST',
     headers: {
@@ -1296,6 +1735,10 @@ async function submitFeedbackChange(payload) {
 }
 
 async function deleteFeedback(id) {
+  if (!state.feedbackEnabled) {
+    return;
+  }
+
   const response = await fetch(`/api/feedback/${encodeURIComponent(id)}?path=${encodeURIComponent(currentDoc.relativePath)}`, {
     method: 'DELETE',
   });
@@ -1311,6 +1754,10 @@ async function deleteFeedback(id) {
 }
 
 async function loadFeedback() {
+  if (!state.feedbackEnabled || !state.currentPath || state.runtime !== 'live') {
+    return;
+  }
+
   const response = await fetch(`/api/feedback?path=${encodeURIComponent(state.currentPath)}`);
   if (!response.ok) {
     return;
@@ -1321,6 +1768,10 @@ async function loadFeedback() {
 }
 
 async function sendFeedback() {
+  if (!state.feedbackEnabled) {
+    return;
+  }
+
   const response = await fetch('/api/send-feedback', {
     method: 'POST',
     headers: {
@@ -1346,7 +1797,18 @@ function toggleTheme() {
   html.dataset.theme = next;
   localStorage.setItem('mdview-theme', next);
 
-  if (!isDirty()) {
+  if (state.runtime === 'static') {
+    if (state.staticDocThemes?.[next] && currentRoute === 'file') {
+      currentDoc = state.staticDocThemes[next];
+      renderFromDoc(currentDoc);
+    } else {
+      renderWorkspace();
+      syncRouteChrome();
+    }
+    return;
+  }
+
+  if (!isDirty() && currentRoute === 'file') {
     refreshCurrentDocument(true);
   }
 }
@@ -1455,16 +1917,26 @@ function applyStoredTheme() {
   const saved = localStorage.getItem('mdview-theme');
   if (saved === 'light' || saved === 'dark') {
     html.dataset.theme = saved;
+  } else if (state.defaultTheme === 'auto') {
+    html.dataset.theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
 }
 
 function syncThemeWithDocument() {
+  if (state.runtime !== 'live' || state.defaultTheme === 'auto' || currentRoute !== 'file') {
+    return;
+  }
+
   if (html.dataset.theme !== state.defaultTheme) {
     refreshCurrentDocument(false);
   }
 }
 
 function openSearch() {
+  if (!searchPalette || !searchInput || currentRoute === 'home') {
+    return;
+  }
+
   searchPalette.classList.remove('hidden');
   searchPalette.setAttribute('aria-hidden', 'false');
   searchInput.value = '';
@@ -1474,12 +1946,19 @@ function openSearch() {
 }
 
 function closeSearch() {
+  if (!searchPalette) {
+    return;
+  }
   searchPalette.classList.add('hidden');
   searchPalette.setAttribute('aria-hidden', 'true');
   clearSearchHighlights();
 }
 
 function renderSearchResults(query) {
+  if (!searchResults) {
+    return;
+  }
+
   const normalized = query.trim().toLowerCase();
   const entries = buildSearchEntries(normalized);
 
@@ -1635,20 +2114,73 @@ function toRelativePath(value) {
   if (value.endsWith('.feedback.json')) {
     value = value.slice(0, -'.feedback.json'.length);
   }
-  if (value.endsWith(`/${state.currentPath}`) || value.endsWith(`\\${state.currentPath}`)) {
+  if (state.currentPath && (value.endsWith(`/${state.currentPath}`) || value.endsWith(`\\${state.currentPath}`))) {
     return state.currentPath;
   }
   if (value === state.currentPath) {
     return value;
   }
-  if (value.includes('/')) {
-    const parts = value.split('/');
-    return parts.slice(parts.findIndex((part) => part === currentDoc.fileName)).join('/') || parts.at(-1);
+  const matchingEntry = (state.fileTree || []).find((entry) => value.endsWith(`/${entry.relative}`) || value.endsWith(`\\${entry.relative}`));
+  if (matchingEntry) {
+    return matchingEntry.relative;
   }
   return value;
 }
 
+function formatRelativeDate(value) {
+  if (!value) {
+    return 'Updated recently';
+  }
+
+  const delta = Date.now() - Number(value);
+  if (delta < 60_000) {
+    return 'Just now';
+  }
+  if (delta < 3_600_000) {
+    return `${Math.round(delta / 60_000)}m ago`;
+  }
+  if (delta < 86_400_000) {
+    return `${Math.round(delta / 3_600_000)}h ago`;
+  }
+  if (delta < 7 * 86_400_000) {
+    return `${Math.round(delta / 86_400_000)}d ago`;
+  }
+  return new Date(value).toLocaleDateString();
+}
+
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function joinBasePath(basePath, routePath) {
+  const normalizedBase = normalizeBasePath(basePath);
+  const normalizedRoute = String(routePath || '').replace(/^\/+/, '');
+  if (!normalizedRoute) {
+    return normalizedBase;
+  }
+  return normalizedBase === '/' ? `/${normalizedRoute}` : `${normalizedBase}/${normalizedRoute}`;
+}
+
+function normalizeBasePath(basePath) {
+  const normalized = `/${String(basePath || '/').trim().replace(/^\/+|\/+$/g, '')}`.replace(/\/+/g, '/');
+  return normalized === '/.' ? '/' : normalized;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function showToast(message) {
+  if (!statusToast) {
+    return;
+  }
   statusToast.hidden = false;
   statusToast.textContent = message;
   clearTimeout(toastTimer);
