@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.feedback.json
+
+# Secrets
+.npmrc
+.env
+.env.local

@@ -1,0 +1,18 @@
+# Development
+node_modules/
+dist/
+.vercel/
+
+# Site (separate deploy)
+site/
+
+# Config/metadata
+.git/
+.gitignore
+.npmignore
+vercel.json
+SKILL.md
+
+# Tests
+test/
+*.test.js
