@@ -412,7 +412,7 @@ ${buildStyles()}
       </div>
       <div class="topbar__actions">
         <button class="chip" id="searchTrigger">Cmd+K Search</button>
-        ${appState.editable ? '<button class="chip" id="editModeButton">Edit</button><button class="chip accent" id="saveEditButton" hidden>Save</button><button class="chip" id="cancelEditButton" hidden>Cancel</button>' : ''}
+        ${appState.editable ? '<span class="save-status" id="saveStatus" hidden>Unsaved changes</span><button class="chip accent" id="saveEditButton" hidden>Save</button>' : ''}
         <button class="chip accent" id="sendFeedbackButton">Send Feedback</button>
         <button class="chip" id="themeToggle" aria-label="Toggle theme">Toggle theme</button>
       </div>
@@ -1223,6 +1223,13 @@ html[data-theme="light"] .topbar {
   gap: 14px;
 }
 
+.save-status {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--accent-strong);
+}
+
 .eyebrow,
 .sidebar-label {
   font-family: "Avenir Next", "Segoe UI", sans-serif;
@@ -1272,6 +1279,11 @@ html[data-theme="light"] .topbar {
 .chip.accent {
   border-color: rgba(100, 181, 167, 0.4);
   background: rgba(100, 181, 167, 0.18);
+}
+
+.chip:disabled {
+  cursor: default;
+  opacity: 0.56;
 }
 
 .sidebar-toggle {
@@ -1382,11 +1394,13 @@ html[data-theme="light"] .topbar {
   box-shadow: var(--shadow);
 }
 
-.doc > :first-child {
+.doc > :first-child,
+.doc .ProseMirror > :first-child {
   margin-top: 0;
 }
 
-.doc > :last-child {
+.doc > :last-child,
+.doc .ProseMirror > :last-child {
   margin-bottom: 0;
 }
 
@@ -1395,28 +1409,39 @@ html[data-theme="light"] .topbar {
 .doc h3,
 .doc h4,
 .doc h5,
-.doc h6 {
+.doc h6,
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
   scroll-margin-top: 110px;
   line-height: 1.12;
   letter-spacing: -0.04em;
   margin: 1.45em 0 0.5em;
 }
 
-.doc h1 {
+.doc h1,
+.ProseMirror h1 {
   font-size: clamp(2.8rem, 5.5vw, 4rem);
 }
 
-.doc h2 {
+.doc h2,
+.ProseMirror h2 {
   font-size: clamp(1.8rem, 3vw, 2.5rem);
   color: var(--accent-strong);
 }
 
-.doc h3 {
+.doc h3,
+.ProseMirror h3 {
   font-size: clamp(1.35rem, 2.3vw, 1.7rem);
 }
 
 .md-block--heading[data-heading-depth="2"] h2,
-.md-block--heading[data-heading-depth="3"] h3 {
+.md-block--heading[data-heading-depth="3"] h3,
+.ProseMirror .md-block--heading[data-heading-depth="2"],
+.ProseMirror .md-block--heading[data-heading-depth="3"] {
   position: relative;
   padding-right: 116px;
 }
@@ -1427,15 +1452,24 @@ html[data-theme="light"] .topbar {
 .doc blockquote,
 .doc pre,
 .doc table,
-.doc hr {
+.doc hr,
+.ProseMirror p,
+.ProseMirror ul,
+.ProseMirror ol,
+.ProseMirror blockquote,
+.ProseMirror pre,
+.ProseMirror table,
+.ProseMirror hr {
   margin: 1em 0;
 }
 
-.doc a {
+.doc a,
+.ProseMirror a {
   color: var(--accent-strong);
 }
 
-.doc strong {
+.doc strong,
+.ProseMirror strong {
   color: inherit;
 }
 
@@ -1447,6 +1481,7 @@ html[data-theme="light"] .topbar {
 }
 
 .doc :not(pre) > code,
+.ProseMirror :not(pre) > code,
 .search-result__preview :not(pre) > code,
 .feedback-item__body :not(pre) > code {
   padding: 0.18em 0.42em;
@@ -1515,7 +1550,8 @@ html[data-theme="light"] .topbar {
   color: var(--text-muted);
 }
 
-.doc tbody tr:hover {
+.doc tbody tr:hover,
+.ProseMirror tbody tr:hover {
   background: rgba(100, 181, 167, 0.08);
 }
 
@@ -1536,12 +1572,26 @@ html[data-theme="light"] .topbar {
   color: #e0e7f6;
 }
 
+.doc pre,
+.ProseMirror pre,
 .code-block pre,
-.code-preview pre {
+.code-preview pre,
+.search-result__preview pre {
   margin: 0;
   overflow: auto;
   border-radius: 18px;
   border: 1px solid var(--line);
+  background: var(--bg-code);
+  padding: 18px 18px 20px;
+}
+
+.doc pre code,
+.ProseMirror pre code,
+.search-result__preview pre code {
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 .md-block {
@@ -1619,36 +1669,14 @@ h3:hover .heading-reactions {
   color: var(--accent);
 }
 
-.editor-shell {
-  border: 1px solid rgba(100, 181, 167, 0.42);
-  border-radius: 22px;
-  background: rgba(8, 13, 20, 0.94);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
-}
-
-html[data-theme="light"] .editor-shell {
-  background: rgba(255, 255, 255, 0.96);
-}
-
-.editor-shell__toolbar {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-}
-
-.editor-shell__hint {
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
 .editor-host {
-  padding: 16px 18px 18px;
+  min-height: calc(100vh - 300px);
 }
 
 .ProseMirror {
   outline: none;
-  min-height: 72px;
+  min-height: calc(100vh - 300px);
+  cursor: text;
 }
 
 .ProseMirror p.is-editor-empty:first-child::before {
@@ -1665,6 +1693,63 @@ html[data-theme="light"] .editor-shell {
 
 .ProseMirror-selectednode {
   outline: 2px solid rgba(100, 181, 167, 0.46);
+}
+
+.ProseMirror pre .hljs-comment,
+.ProseMirror pre .hljs-quote,
+.search-result__preview pre .hljs-comment,
+.search-result__preview pre .hljs-quote {
+  color: #7f8da5;
+}
+
+.ProseMirror pre .hljs-keyword,
+.ProseMirror pre .hljs-selector-tag,
+.ProseMirror pre .hljs-literal,
+.ProseMirror pre .hljs-section,
+.ProseMirror pre .hljs-link,
+.search-result__preview pre .hljs-keyword,
+.search-result__preview pre .hljs-selector-tag,
+.search-result__preview pre .hljs-literal,
+.search-result__preview pre .hljs-section,
+.search-result__preview pre .hljs-link {
+  color: #ffb86c;
+}
+
+.ProseMirror pre .hljs-string,
+.ProseMirror pre .hljs-title,
+.ProseMirror pre .hljs-name,
+.ProseMirror pre .hljs-attribute,
+.ProseMirror pre .hljs-template-tag,
+.ProseMirror pre .hljs-template-variable,
+.search-result__preview pre .hljs-string,
+.search-result__preview pre .hljs-title,
+.search-result__preview pre .hljs-name,
+.search-result__preview pre .hljs-attribute,
+.search-result__preview pre .hljs-template-tag,
+.search-result__preview pre .hljs-template-variable {
+  color: #a5d6ff;
+}
+
+.ProseMirror pre .hljs-number,
+.ProseMirror pre .hljs-symbol,
+.ProseMirror pre .hljs-bullet,
+.ProseMirror pre .hljs-variable,
+.ProseMirror pre .hljs-meta,
+.search-result__preview pre .hljs-number,
+.search-result__preview pre .hljs-symbol,
+.search-result__preview pre .hljs-bullet,
+.search-result__preview pre .hljs-variable,
+.search-result__preview pre .hljs-meta {
+  color: #8fd9cc;
+}
+
+.ProseMirror pre .hljs-built_in,
+.ProseMirror pre .hljs-type,
+.ProseMirror pre .hljs-class .hljs-title,
+.search-result__preview pre .hljs-built_in,
+.search-result__preview pre .hljs-type,
+.search-result__preview pre .hljs-class .hljs-title {
+  color: #ffd97d;
 }
 
 .floating-toolbar {

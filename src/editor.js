@@ -1,11 +1,14 @@
 import { Editor } from '@tiptap/core';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit } from '@tiptap/extension-table';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
+import { TextSelection } from '@tiptap/pm/state';
 import { marked } from 'marked';
+import { common, createLowlight } from 'lowlight';
 import { Markdown } from 'tiptap-markdown';
 
 const state = window.__MDVIEW__;
@@ -24,13 +27,13 @@ const feedbackList = document.getElementById('feedbackList');
 const feedbackCount = document.getElementById('feedbackCount');
 const feedbackMeta = document.getElementById('feedbackMeta');
 const sendFeedbackButton = document.getElementById('sendFeedbackButton');
-const editModeButton = document.getElementById('editModeButton');
+const saveStatus = document.getElementById('saveStatus');
 const saveEditButton = document.getElementById('saveEditButton');
-const cancelEditButton = document.getElementById('cancelEditButton');
 const floatingToolbarRoot = document.getElementById('floatingToolbarRoot');
 const composerRoot = document.getElementById('composerRoot');
 const statusToast = document.getElementById('statusToast');
 const html = document.documentElement;
+const lowlight = createLowlight(common);
 
 const SLASH_COMMANDS = [
   { id: 'heading-2', label: 'Heading 2', detail: 'Large section heading', run: (editor) => editor.chain().focus().toggleHeading({ level: 2 }).run() },
@@ -49,6 +52,9 @@ let activeEditor = null;
 let activeComposer = null;
 let selectedResult = 0;
 let toastTimer = null;
+let pendingDecorateFrame = 0;
+let dirty = false;
+let saveInFlight = false;
 
 applyStoredTheme();
 init();
@@ -57,7 +63,7 @@ function init() {
   renderFromDoc(currentDoc);
   renderFeedback(feedbackState);
   bindEvents();
-  syncEditModeControls();
+  syncSaveState();
   syncThemeWithDocument();
   hydrateFromHash();
   connectSocket();
@@ -68,12 +74,8 @@ function bindEvents() {
   searchTrigger?.addEventListener('click', openSearch);
   sidebarToggle?.addEventListener('click', () => layout.classList.toggle('sidebar-open'));
   sendFeedbackButton?.addEventListener('click', sendFeedback);
-  editModeButton?.addEventListener('click', startDocumentEdit);
   saveEditButton?.addEventListener('click', async () => {
-    await saveEdit();
-  });
-  cancelEditButton?.addEventListener('click', () => {
-    cancelEdit();
+    await saveDocument();
   });
 
   document.addEventListener('keydown', async (event) => {
@@ -92,16 +94,22 @@ function bindEvents() {
         closeComposer();
         return;
       }
-      if (activeEditor) {
-        cancelEdit();
-      }
       return;
     }
 
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeEditor) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
-      await saveEdit();
+      await saveDocument();
     }
+  });
+
+  window.addEventListener('beforeunload', (event) => {
+    if (!isDirty()) {
+      return;
+    }
+
+    event.preventDefault();
+    event.returnValue = '';
   });
 
   searchPalette.addEventListener('click', (event) => {
@@ -143,7 +151,8 @@ function bindEvents() {
   docRoot.addEventListener('click', async (event) => {
     const copyButton = event.target.closest('.copy-code');
     if (copyButton) {
-      const code = copyButton.parentElement.querySelector('pre code');
+      const container = copyButton.closest('.md-block, .code-block, pre');
+      const code = container?.querySelector('pre code, code');
       const text = code ? code.innerText : '';
       await navigator.clipboard.writeText(text);
       copyButton.textContent = 'Copied';
@@ -200,12 +209,10 @@ function renderFromDoc(doc) {
     blocks,
     markdown: buildDocumentMarkdown(blocks, doc.lineCount),
   };
-  docRoot.innerHTML = currentDoc.html;
   pageTitle.textContent = currentDoc.title;
   document.title = currentDoc.title;
-  renderToc(currentDoc.toc);
   renderFiles(state.fileTree || []);
-  decorateDocument();
+  mountDocumentEditor(currentDoc.markdown);
   clearSearchHighlights();
 }
 
@@ -296,23 +303,75 @@ function feedbackBody(change) {
 }
 
 function decorateDocument() {
-  docRoot.querySelectorAll('.heading-reactions').forEach((node) => node.remove());
+  const editorRoot = getEditorRoot();
+  if (!editorRoot) {
+    renderToc([]);
+    return;
+  }
 
-  docRoot.querySelectorAll('.md-block--heading[data-heading-depth="2"], .md-block--heading[data-heading-depth="3"]').forEach((block) => {
-    const heading = block.querySelector('h2, h3');
-    if (!heading) {
-      return;
+  editorRoot.querySelectorAll('.heading-reactions').forEach((node) => node.remove());
+  const blocks = [...editorRoot.children].filter((node) => node.nodeType === Node.ELEMENT_NODE);
+  const slugCounts = new Map();
+  const liveToc = [];
+  let currentSection = currentDoc.title;
+
+  blocks.forEach((block, index) => {
+    const matchedBlock = currentDoc.blocks[index];
+    const kind = classifyBlock(block);
+
+    [...block.classList]
+      .filter((name) => name.startsWith('md-block--'))
+      .forEach((name) => block.classList.remove(name));
+
+    block.classList.add('md-block', `md-block--${kind}`);
+    block.dataset.blockId = `block-${index + 1}`;
+    block.dataset.blockType = kind;
+    block.dataset.startLine = String(matchedBlock?.startLine ?? index + 1);
+    block.dataset.endLine = String(matchedBlock?.endLine ?? matchedBlock?.startLine ?? index + 1);
+
+    if (/^H[1-6]$/.test(block.tagName)) {
+      const depth = Number(block.tagName.slice(1));
+      const text = cleanNodeText(block);
+      const headingId = uniqueSlug(text, slugCounts);
+      currentSection = text || currentSection;
+      block.id = headingId;
+      block.dataset.headingId = headingId;
+      block.dataset.headingDepth = String(depth);
+      block.dataset.headingText = text;
+      liveToc.push({ id: headingId, text, depth });
+
+      if ((depth === 2 || depth === 3) && state.editable) {
+        const reactions = document.createElement('div');
+        reactions.className = 'heading-reactions';
+        reactions.contentEditable = 'false';
+        reactions.innerHTML = `
+          <button type="button" data-feedback-type="approve" aria-label="Approve section" title="Approve section">&#128077;</button>
+          <button type="button" data-feedback-type="reject" aria-label="Reject section" title="Reject section">&#128078;</button>
+          <button type="button" data-feedback-type="comment" aria-label="Comment on section" title="Comment on section">&#128172;</button>
+        `;
+        block.appendChild(reactions);
+      }
+    } else {
+      delete block.dataset.headingId;
+      delete block.dataset.headingDepth;
+      delete block.dataset.headingText;
     }
 
-    const reactions = document.createElement('div');
-    reactions.className = 'heading-reactions';
-    reactions.innerHTML = `
-      <button type="button" data-feedback-type="approve" aria-label="Approve section" title="Approve section">&#128077;</button>
-      <button type="button" data-feedback-type="reject" aria-label="Reject section" title="Reject section">&#128078;</button>
-      <button type="button" data-feedback-type="comment" aria-label="Comment on section" title="Comment on section">&#128172;</button>
-    `;
-    heading.appendChild(reactions);
+    if (kind === 'code' && !block.querySelector(':scope > .copy-code')) {
+      const copyButton = document.createElement('button');
+      copyButton.type = 'button';
+      copyButton.className = 'copy-code';
+      copyButton.textContent = 'Copy';
+      copyButton.contentEditable = 'false';
+      copyButton.tabIndex = -1;
+      block.appendChild(copyButton);
+    }
+
+    block.dataset.section = currentSection;
+    block.dataset.searchText = cleanNodeText(block);
   });
+
+  renderToc(liveToc);
 }
 
 async function hydrateFromHash() {
@@ -327,13 +386,16 @@ async function hydrateFromHash() {
 }
 
 async function loadDocument(relativePath, pushHistory = false) {
-  cancelEdit({ restore: false });
+  if (!confirmDiscardChanges()) {
+    return false;
+  }
+
   closeComposer();
   const scroll = window.scrollY;
   const response = await fetch(`/api/doc?path=${encodeURIComponent(relativePath)}&theme=${encodeURIComponent(currentTheme())}`);
   if (!response.ok) {
     showToast('Unable to load document');
-    return;
+    return false;
   }
 
   const doc = await response.json();
@@ -346,6 +408,7 @@ async function loadDocument(relativePath, pushHistory = false) {
   }
 
   requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+  return true;
 }
 
 function connectSocket() {
@@ -355,7 +418,8 @@ function connectSocket() {
     const payload = JSON.parse(event.data);
 
     if (payload.type === 'file-changed') {
-      if (activeEditor) {
+      if (isDirty()) {
+        showToast('File changed on disk while you have unsaved edits');
         return;
       }
       const changedRelative = toRelativePath(payload.currentPath || payload.path);
@@ -369,7 +433,7 @@ function connectSocket() {
       state.fileTree = payload.files;
       renderFiles(state.fileTree);
       const changedRelative = toRelativePath(payload.path);
-      if (!activeEditor && changedRelative === state.currentPath) {
+      if (!isDirty() && changedRelative === state.currentPath) {
         await refreshCurrentDocument(true);
       }
       return;
@@ -388,6 +452,10 @@ function connectSocket() {
 }
 
 async function refreshCurrentDocument(preserveScroll) {
+  if (isDirty()) {
+    return;
+  }
+
   const scroll = window.scrollY;
   const response = await fetch(`/api/doc?path=${encodeURIComponent(state.currentPath)}&theme=${encodeURIComponent(currentTheme())}`);
   if (!response.ok) {
@@ -401,50 +469,26 @@ async function refreshCurrentDocument(preserveScroll) {
   }
 }
 
-function startDocumentEdit() {
-  if (!state.editable) {
-    return;
-  }
-
-  if (activeEditor) {
-    return;
-  }
-
-  closeSearch();
+function mountDocumentEditor(markdown) {
+  destroyEditor();
   closeComposer();
-
-  const shell = document.createElement('div');
-  const host = document.createElement('div');
-  const toolbar = document.createElement('div');
-
-  shell.className = 'editor-shell';
-  host.className = 'editor-host';
-  toolbar.className = 'editor-shell__toolbar';
-  toolbar.innerHTML = '<div class="editor-shell__hint">Visual editing enabled. Save or cancel from the top bar. Select text for formatting and comments. Type / for blocks.</div>';
-  shell.appendChild(toolbar);
-  shell.appendChild(host);
-
-  docRoot.classList.add('is-editing');
   docRoot.innerHTML = '';
-  docRoot.appendChild(shell);
+
+  const host = document.createElement('div');
+  host.className = 'editor-host';
+  docRoot.appendChild(host);
 
   let editor;
 
   try {
-    editor = createMarkdownEditor(host, currentDoc.markdown, 'Type / for commands, or start writing…');
+    editor = createMarkdownEditor(host, markdown, 'Type / for commands, or start writing…');
   } catch (error) {
     console.error('Failed to initialize TipTap editor.', {
       error,
       path: currentDoc.relativePath,
-      markdown: currentDoc.markdown,
+      markdown,
     });
-    closeFloatingToolbar();
-    closeSlashMenu();
-    closeComposer();
-    docRoot.classList.remove('is-editing');
-    renderFromDoc(currentDoc);
-
-    showToast('Unable to start visual editor. Check console.');
+    showToast('Unable to start inline editor. Check console.');
     return;
   }
 
@@ -471,40 +515,33 @@ function startDocumentEdit() {
 
   activeEditor = {
     editor,
-    section: currentDoc.title,
-    line: 1,
+    host,
     toolbar: null,
     slashMenu: null,
     slashState: null,
     slashIndex: 0,
   };
 
-  syncEditModeControls();
-  syncFloatingToolbar();
-  syncSlashMenu();
+  dirty = false;
+  syncSaveState();
+  scheduleDecorateDocument();
 }
 
-function cancelEdit(options = {}) {
+function destroyEditor() {
   if (!activeEditor) {
     return;
   }
 
-  const { editor } = activeEditor;
-  editor?.destroy();
+  cancelAnimationFrame(pendingDecorateFrame);
+  pendingDecorateFrame = 0;
   closeFloatingToolbar();
   closeSlashMenu();
-  closeComposer();
-  docRoot.classList.remove('is-editing');
+  activeEditor.editor?.destroy();
   activeEditor = null;
-  syncEditModeControls();
-
-  if (options.restore !== false) {
-    renderFromDoc(currentDoc);
-  }
 }
 
-async function saveEdit() {
-  if (!activeEditor) {
+async function saveDocument() {
+  if (!state.editable || !activeEditor || saveInFlight || !isDirty()) {
     return;
   }
 
@@ -515,45 +552,154 @@ async function saveEdit() {
     return;
   }
 
+  const context = getSelectionContext();
   const markdown = normalizeSerializedMarkdown(markdownStorage.getMarkdown());
   const payload = {
     path: currentDoc.relativePath,
     startLine: 1,
     endLine: Number(currentDoc.lineCount),
     content: markdown,
-    section: activeEditor.section,
+    section: context.section || currentDoc.title,
     anchor: {
-      blockId: null,
-      headingId: null,
-      line: activeEditor.line,
+      blockId: context.block?.dataset.blockId || null,
+      headingId: context.block?.dataset.headingId || null,
+      line: Number(context.block?.dataset.startLine) || 1,
     },
   };
 
-  const response = await fetch('/api/save', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+  saveInFlight = true;
+  syncSaveState();
 
-  if (!response.ok) {
-    showToast('Unable to save');
-    return;
+  try {
+    const response = await fetch('/api/save', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      showToast('Unable to save');
+      return;
+    }
+
+    dirty = false;
+    currentDoc.markdown = markdown;
+    await refreshCurrentDocument(true);
+    await loadFeedback();
+    showToast('Saved');
+  } finally {
+    saveInFlight = false;
+    syncSaveState();
   }
-
-  cancelEdit({ restore: false });
-  await refreshCurrentDocument(true);
-  await loadFeedback();
-  showToast('Saved');
 }
 
 function normalizeSerializedMarkdown(markdown) {
   return markdown.replace(/\s+$/, '');
 }
 
+function getEditorRoot() {
+  return activeEditor?.editor?.view?.dom || null;
+}
+
+function getEditorMarkdown() {
+  const markdownStorage = activeEditor?.editor?.storage?.markdown;
+  return markdownStorage?.getMarkdown ? normalizeSerializedMarkdown(markdownStorage.getMarkdown()) : currentDoc.markdown;
+}
+
+function isDirty() {
+  return dirty;
+}
+
+function syncSaveState() {
+  const showSaveControls = Boolean(state.editable && (dirty || saveInFlight));
+
+  if (saveStatus) {
+    saveStatus.hidden = !showSaveControls;
+    saveStatus.textContent = saveInFlight ? 'Saving…' : 'Unsaved changes';
+  }
+
+  if (saveEditButton) {
+    saveEditButton.hidden = !showSaveControls;
+    saveEditButton.disabled = saveInFlight || !dirty;
+  }
+}
+
+function syncDirtyState() {
+  if (!state.editable || !activeEditor) {
+    dirty = false;
+    syncSaveState();
+    return;
+  }
+
+  const nextDirty = getEditorMarkdown() !== currentDoc.markdown;
+  if (nextDirty !== dirty) {
+    dirty = nextDirty;
+    syncSaveState();
+  }
+}
+
+function confirmDiscardChanges() {
+  return !isDirty() || window.confirm('You have unsaved changes. Discard them and continue?');
+}
+
+function scheduleDecorateDocument() {
+  cancelAnimationFrame(pendingDecorateFrame);
+  pendingDecorateFrame = requestAnimationFrame(() => {
+    pendingDecorateFrame = 0;
+    decorateDocument();
+  });
+}
+
+function classifyBlock(block) {
+  if (/^H[1-6]$/.test(block.tagName)) {
+    return 'heading';
+  }
+
+  if (block.tagName === 'PRE') {
+    return 'code';
+  }
+
+  if (block.tagName === 'BLOCKQUOTE') {
+    return 'blockquote';
+  }
+
+  if (block.tagName === 'UL' || block.tagName === 'OL') {
+    return 'list';
+  }
+
+  if (block.tagName === 'HR') {
+    return 'rule';
+  }
+
+  if (block.tagName === 'TABLE' || block.classList.contains('tableWrapper') || block.querySelector(':scope > table')) {
+    return 'table';
+  }
+
+  return 'paragraph';
+}
+
+function cleanNodeText(node) {
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll?.('.heading-reactions, .copy-code').forEach((entry) => entry.remove());
+  return clone.textContent.replace(/\s+/g, ' ').trim();
+}
+
+function getSelectionContext() {
+  const selection = window.getSelection();
+  const anchorNode = selection?.anchorNode;
+  const anchorElement = anchorNode?.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode?.parentElement;
+  const block = anchorElement?.closest('.md-block') || getEditorRoot()?.querySelector('.md-block');
+  return {
+    block,
+    section: block?.dataset.section || currentDoc.title,
+  };
+}
+
 function syncFloatingToolbar() {
-  if (!activeEditor) {
+  if (!activeEditor || !state.editable) {
+    closeFloatingToolbar();
     return;
   }
 
@@ -596,6 +742,7 @@ function syncFloatingToolbar() {
       } else if (command === 'comment') {
         const currentSelection = editor.state.selection;
         const selectedText = editor.state.doc.textBetween(currentSelection.from, currentSelection.to, ' ').trim();
+        const context = getSelectionContext();
         const rect = toolbar.getBoundingClientRect();
         openComposer({
           x: rect.left,
@@ -606,14 +753,14 @@ function syncFloatingToolbar() {
           onSubmit: async (comment) => {
             await submitFeedbackChange({
               type: 'comment',
-              section: activeEditor.section,
+              section: context.section,
               selectedText,
               comment,
-              line: activeEditor.line,
+              line: Number(context.block?.dataset.startLine) || 1,
               anchor: {
-                blockId: null,
-                headingId: null,
-                line: activeEditor.line,
+                blockId: context.block?.dataset.blockId || null,
+                headingId: context.block?.dataset.headingId || null,
+                line: Number(context.block?.dataset.startLine) || 1,
               },
             });
           },
@@ -648,7 +795,8 @@ function closeFloatingToolbar() {
 }
 
 function syncSlashMenu() {
-  if (!activeEditor) {
+  if (!activeEditor || !state.editable) {
+    closeSlashMenu();
     return;
   }
 
@@ -907,27 +1055,12 @@ async function sendFeedback() {
 }
 
 function toggleTheme() {
-  if (activeEditor) {
-    showToast('Save or cancel editing before changing theme');
-    return;
-  }
-
   const next = html.dataset.theme === 'light' ? 'dark' : 'light';
   html.dataset.theme = next;
   localStorage.setItem('mdview-theme', next);
-  refreshCurrentDocument(true);
-}
 
-function syncEditModeControls() {
-  const editing = Boolean(activeEditor);
-  if (editModeButton) {
-    editModeButton.hidden = editing;
-  }
-  if (saveEditButton) {
-    saveEditButton.hidden = !editing;
-  }
-  if (cancelEditButton) {
-    cancelEditButton.hidden = !editing;
+  if (!isDirty()) {
+    refreshCurrentDocument(true);
   }
 }
 
@@ -935,9 +1068,14 @@ function createMarkdownEditor(element, content, placeholder) {
   return new Editor({
     element,
     content,
+    editable: state.editable,
     extensions: [
       StarterKit.configure({
         link: false,
+        codeBlock: false,
+      }),
+      CodeBlockLowlight.configure({
+        lowlight,
       }),
       Link.configure({
         autolink: true,
@@ -965,14 +1103,43 @@ function createMarkdownEditor(element, content, placeholder) {
         transformPastedText: true,
       }),
     ],
-    autofocus: 'end',
+    autofocus: false,
+    editorProps: {
+      attributes: {
+        class: 'mdview-editor',
+      },
+      handleDOMEvents: {
+        dblclick: (view, event) => {
+          if (!state.editable) {
+            return false;
+          }
+
+          const position = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!position) {
+            return false;
+          }
+
+          const selection = TextSelection.near(view.state.doc.resolve(position.pos));
+          view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+          view.focus();
+          event.preventDefault();
+          return true;
+        },
+      },
+    },
+    onCreate: () => {
+      scheduleDecorateDocument();
+      syncDirtyState();
+    },
     onSelectionUpdate: () => {
       syncFloatingToolbar();
       syncSlashMenu();
     },
     onUpdate: () => {
+      syncDirtyState();
       syncFloatingToolbar();
       syncSlashMenu();
+      scheduleDecorateDocument();
     },
   });
 }
@@ -1007,11 +1174,6 @@ function syncThemeWithDocument() {
 }
 
 function openSearch() {
-  if (activeEditor) {
-    showToast('Save or cancel editing before searching');
-    return;
-  }
-
   searchPalette.classList.remove('hidden');
   searchPalette.setAttribute('aria-hidden', 'false');
   searchInput.value = '';
@@ -1059,9 +1221,9 @@ function renderSearchResults(query) {
 }
 
 function buildSearchEntries(query) {
-  const base = currentDoc.blocks.map((block) => {
-    const kind = block.heading ? 'Heading' : 'Content';
-    const score = query ? fuzzyScore(query, (block.searchText || '').toLowerCase()) : 1;
+  const base = collectDocumentBlocks().map((block) => {
+    const kind = block.headingId ? 'Heading' : 'Content';
+    const score = query ? fuzzyScore(query, block.searchText.toLowerCase()) : 1;
     return {
       score,
       kind,
@@ -1069,8 +1231,8 @@ function buildSearchEntries(query) {
       startLine: block.startLine,
       previewHtml: block.previewHtml,
       anchor: {
-        blockId: block.id,
-        headingId: block.heading?.id || block.heading?.slug || null,
+        blockId: block.blockId,
+        headingId: block.headingId,
         line: block.startLine,
       },
     };
@@ -1104,6 +1266,27 @@ function renderSearchPreview(markdown) {
   }
 }
 
+function collectDocumentBlocks() {
+  const editorRoot = getEditorRoot();
+  if (!editorRoot) {
+    return [];
+  }
+
+  return [...editorRoot.querySelectorAll(':scope > .md-block')].map((block) => {
+    const preview = block.cloneNode(true);
+    preview.querySelectorAll('.heading-reactions, .copy-code').forEach((node) => node.remove());
+
+    return {
+      blockId: block.dataset.blockId,
+      headingId: block.dataset.headingId || null,
+      section: block.dataset.section || currentDoc.title,
+      startLine: Number(block.dataset.startLine) || 1,
+      searchText: block.dataset.searchText || cleanNodeText(block),
+      previewHtml: preview.outerHTML,
+    };
+  });
+}
+
 function syncSelectedResult(buttons) {
   buttons.forEach((button, index) => {
     button.classList.toggle('is-selected', index === selectedResult);
@@ -1116,11 +1299,6 @@ function clearSearchHighlights() {
 }
 
 function jumpToTarget(anchor) {
-  if (activeEditor) {
-    showToast('Save or cancel editing before jumping to sections');
-    return;
-  }
-
   const heading = anchor?.headingId ? document.getElementById(anchor.headingId) : null;
   const block = anchor?.blockId
     ? docRoot.querySelector(`.md-block[data-block-id="${CSS.escape(anchor.blockId)}"]`)
